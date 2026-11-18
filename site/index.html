@@ -81,8 +81,15 @@
 
     async function boot() {
       const member = await requireTeamMember();
-      if (member) return loadDashboard(member);
-      showLogin();
+      if (member) {
+        try { await loadDashboard(member); }
+        catch (err) {
+          document.getElementById("runs").innerHTML =
+            `<tr><td colspan="4" class="notice">Erreur : ${esc(err.message || err)}</td></tr>`;
+        }
+        return;
+      }
+      if (document.getElementById("login")) showLogin();
     }
 
     function showLogin() {
