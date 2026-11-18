@@ -14,7 +14,9 @@ export function esc(value) {
 export async function requireTeamMember() {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) {
-    location.href = "index.html";
+    // Sur la page de connexion (index), on ne redirige pas : sinon boucle infinie.
+    const onIndex = /(^|\/)(index\.html)?$/.test(location.pathname);
+    if (!onIndex) location.href = "index.html";
     return null;
   }
   const { data: member, error } = await sb
