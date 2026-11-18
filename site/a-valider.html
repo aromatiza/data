@@ -69,6 +69,7 @@
           <td>${gap(d.atwater_gap_pct, "Atwater")} ${gap(d.tmca_gap_pct, "TMCA")}
               ${d.n_unlinked > 0 ? `<span class="tag warn">${d.n_unlinked} ingrédient(s) non relié(s)</span>` : ""}</td>
           <td class="actions">
+            <a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a>
             <button class="primary" data-kind="dish" data-act="valide">Valider</button>
             <button data-kind="dish" data-act="rejete">Rejeter</button>
           </td>
@@ -116,6 +117,7 @@
             <td>${p.energy_kcal ?? "–"} kcal · sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g<br>${src}</td>
             <td>${add}</td>
             <td class="actions">
+              <a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a>
               <button class="primary" data-kind="product" data-act="valide">Valider</button>
               <button data-kind="product" data-act="rejete">Rejeter</button>
             </td>
