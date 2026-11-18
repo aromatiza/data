@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NutriX Data — Tableau de bord</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+</head>
+<body>
+  <div id="login" class="login" hidden>
+    <h1>Connexion</h1>
+    <form id="login-form">
+      <label for="email">Email</label>
+      <input id="email" type="email" required autocomplete="username">
+      <label for="password">Mot de passe</label>
+      <input id="password" type="password" required autocomplete="current-password">
+      <p><button class="primary" type="submit" style="width:100%;margin-top:16px">Se connecter</button></p>
+      <p id="login-error" class="notice" hidden></p>
+    </form>
+  </div>
+
+  <div id="app" class="layout" hidden>
+    <div id="side"></div>
+    <main>
+      <h1>Tableau de bord</h1>
+      <div class="cards">
+        <div class="card"><div class="n" id="c-valides">–</div><div class="l">Plats validés</div></div>
+        <div class="card"><div class="n" id="c-attente">–</div><div class="l">Plats à valider</div></div>
+        <div class="card"><div class="n" id="c-ingr">–</div><div class="l">Ingrédients (base)</div></div>
+        <div class="card"><div class="n" id="c-produits">–</div><div class="l">Produits validés</div></div>
+      </div>
+      <h2 style="font-size:18px;color:var(--forest)">Derniers rapports de l'agent</h2>
+      <table>
+        <thead><tr><th>Date</th><th>Plats ajoutés</th><th>Produits ajoutés</th><th>Rapport</th></tr></thead>
+        <tbody id="runs"><tr><td colspan="4" class="muted">Chargement…</td></tr></tbody>
+      </table>
+    </main>
+  </div>
+
+  <script type="module">
+    import { sb, esc, requireTeamMember, nav, wireLogout } from "./app.js";
+
+    async function count(table, filter) {
+      let q = sb.from(table).select("*", { count: "exact", head: true });
+      if (filter) q = filter(q);
+      const { count: n, error } = await q;
+      if (error) throw error;
+      return n ?? 0;
+    }
+
+    async function loadDashboard(member) {
+      document.getElementById("side").outerHTML = nav("index.html");
+      wireLogout();
+      document.getElementById("app").hidden = false;
+
+      const [valides, attente, ingr, produits] = await Promise.all([
+        count("dishes", (q) => q.eq("status", "valide")),
+        count("dishes", (q) => q.eq("status", "a_valider")),
+        count("ingredients"),
+        count("products", (q) => q.eq("status", "valide")),
+      ]);
+      document.getElementById("c-valides").textContent = valides;
+      document.getElementById("c-attente").textContent = attente;
+      document.getElementById("c-ingr").textContent = ingr;
+      document.getElementById("c-produits").textContent = produits;
+
+      const { data: runs } = await sb.from("agent_runs")
+        .select("started_at, dishes_added, products_added, report, errors")
+        .order("started_at", { ascending: false }).limit(10);
+      const tbody = document.getElementById("runs");
+      tbody.innerHTML = (runs && runs.length) ? runs.map((r) => `
+        <tr>
+          <td>${esc(new Date(r.started_at).toLocaleString("fr-FR"))}</td>
+          <td>${r.dishes_added}</td>
+          <td>${r.products_added}</td>
+          <td>${esc(r.report || "")}${r.errors ? `<br><span class="tag warn">Erreurs</span> ${esc(r.errors)}` : ""}</td>
+        </tr>`).join("")
+        : `<tr><td colspan="4" class="muted">Aucun rapport pour l'instant.</td></tr>`;
+    }
+
+    async function boot() {
+      const member = await requireTeamMember();
+      if (member) return loadDashboard(member);
+      showLogin();
+    }
+
+    function showLogin() {
+      document.getElementById("login").hidden = false;
+      document.getElementById("login-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const { error } = await sb.auth.signInWithPassword({
+          email: document.getElementById("email").value.trim(),
+          password: document.getElementById("password").value,
+        });
+        const box = document.getElementById("login-error");
+        if (error) { box.hidden = false; box.textContent = "Email ou mot de passe incorrect."; return; }
+        location.reload();
+      });
+    }
+
+    boot();
+  </script>
+</body>
+</html>

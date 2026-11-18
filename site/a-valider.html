@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NutriX Data — À valider</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+</head>
+<body>
+  <div id="app" class="layout" hidden>
+    <div id="side"></div>
+    <main>
+      <h1>Plats à valider</h1>
+      <p class="muted">Vérifie la source et le calcul avant de valider. Les valeurs viennent de la table <b>ingredients</b> (méthode des recettes), jamais de l'IA.</p>
+      <div id="dishes">Chargement…</div>
+
+      <h1 style="margin-top:34px">Produits à valider</h1>
+      <p class="muted">Vérifie l'étiquette (photo ou texte), les valeurs et les additifs.</p>
+      <div id="products">Chargement…</div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { sb, esc, requireTeamMember, nav, wireLogout } from "./app.js";
+
+    let member = null;
+
+    function gap(pct, label) {
+      if (pct === null || pct === undefined) return "";
+      const bad = Number(pct) > 15;
+      return `<span class="tag ${bad ? "warn" : "ok"}">${label} ${Number(pct).toFixed(1)} %</span>`;
+    }
+
+    // ---------- Plats ----------
+    async function loadDishes() {
+      const { data, error } = await sb.from("dish_nutrition")
+        .select("*").eq("status", "a_valider").order("name_fr");
+      const box = document.getElementById("dishes");
+      if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
+      if (!data.length) { box.innerHTML = `<p class="muted">Rien à valider.</p>`; return; }
+
+      // Infos en plus : image, noms, région, confiance, sources de la recette
+      const ids = data.map((d) => d.dish_id);
+      const { data: extra } = await sb.from("dishes")
+        .select("id, name_ar, name_darija, region, confidence, image_url, image_credit, image_source, recipes(sources, version)")
+        .in("id", ids);
+      const byId = Object.fromEntries((extra || []).map((x) => [x.id, x]));
+
+      const rows = data.map((d) => {
+        const x = byId[d.dish_id] || {};
+        const rec = (x.recipes || []).sort((a, b) => b.version - a.version)[0];
+        const srcs = (rec?.sources || []).filter((s) => /^https?:\/\//.test(s.url || ""))
+          .map((s, i) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">[${i + 1}] ${esc(s.title || "source")}</a>`).join("<br>");
+        const img = /^https:\/\//.test(x.image_url || "")
+          ? `<img src="${esc(x.image_url)}" alt="${esc(d.name_fr)}" loading="lazy" style="width:90px;height:90px;object-fit:cover;border-radius:10px;display:block;margin-bottom:4px">
+             <span class="muted" style="font-size:11px">${esc(x.image_credit || "")}</span>`
+          : `<span class="tag warn">pas d'image</span>`;
+        const conf = x.confidence ? `<span class="tag ${x.confidence === "haute" ? "ok" : "warn"}">confiance ${esc(x.confidence)}</span>` : "";
+        return `
+        <tr data-id="${d.dish_id}">
+          <td>${img}</td>
+          <td><b>${esc(d.name_fr)}</b> ${x.name_darija ? `· ${esc(x.name_darija)}` : ""} ${x.name_ar ? `· ${esc(x.name_ar)}` : ""}<br>
+              <span class="muted">${d.n_ingredients} ingrédients${x.region ? " · " + esc(x.region) : ""}</span> ${conf}
+              ${srcs ? `<div class="muted" style="font-size:12px;margin-top:4px">${srcs}</div>` : `<br><span class="tag warn">aucune source</span>`}</td>
+          <td>${d.energy_kcal_100g ?? "–"} kcal<br>
+              <span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"} (g/100 g)</span></td>
+          <td>${d.portion_g ? esc(d.portion_g) + " g" : "–"}</td>
+          <td>${gap(d.atwater_gap_pct, "Atwater")} ${gap(d.tmca_gap_pct, "TMCA")}
+              ${d.n_unlinked > 0 ? `<span class="tag warn">${d.n_unlinked} ingrédient(s) non relié(s)</span>` : ""}</td>
+          <td class="actions">
+            <button class="primary" data-kind="dish" data-act="valide">Valider</button>
+            <button data-kind="dish" data-act="rejete">Rejeter</button>
+          </td>
+        </tr>`;
+      }).join("");
+
+      box.innerHTML = `<table>
+        <thead><tr><th>Image</th><th>Plat</th><th>Valeurs / 100 g</th><th>Portion</th><th>Contrôles</th><th>Action</th></tr></thead>
+        <tbody>${rows}</tbody></table>`;
+    }
+
+    async function decideDish(id, action, reason) {
+      const status = action === "valide" ? "valide" : "rejete";
+      const { error } = await sb.from("dishes")
+        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString() })
+        .eq("id", id);
+      if (error) { alert(error.message); return; }
+      await sb.from("recipes").update({ status }).eq("dish_id", id);
+      await sb.from("review_log").insert({ table_name: "dishes", row_id: id, action: status, reason });
+    }
+
+    // ---------- Produits ----------
+    async function loadProducts() {
+      const { data, error } = await sb.from("products")
+        .select("id, name, brand, barcode, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, product_additives(additives(e_code, name_fr))")
+        .eq("status", "a_valider").order("created_at", { ascending: false });
+      const box = document.getElementById("products");
+      if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
+      if (!data.length) { box.innerHTML = `<p class="muted">Rien à valider.</p>`; return; }
+
+      const rows = data.map((p) => {
+        const add = (p.product_additives || []).map((x) => x.additives)
+          .filter(Boolean).map((a) => esc(a.e_code || a.name_fr)).join(", ") || "aucun";
+        const srcLabel = p.source === "OpenFoodFacts" ? "Open Food Facts (ODbL)" : "Étiquette";
+        const src = /^https?:\/\//.test(p.source_url || "")
+          ? `<a class="muted" href="${esc(p.source_url)}" target="_blank" rel="noopener">${srcLabel}</a>`
+          : `<span class="muted">${srcLabel}</span>`;
+        const img = /^https:\/\//.test(p.image_url || "")
+          ? `<img src="${esc(p.image_url)}" alt="${esc(p.name)}" loading="lazy" style="width:90px;height:90px;object-fit:contain;border-radius:10px;background:#fff;display:block">`
+          : `<span class="tag warn">pas d'image</span>`;
+        return `
+          <tr data-id="${p.id}">
+            <td>${img}</td>
+            <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span></td>
+            <td>${p.energy_kcal ?? "–"} kcal · sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g<br>${src}</td>
+            <td>${add}</td>
+            <td class="actions">
+              <button class="primary" data-kind="product" data-act="valide">Valider</button>
+              <button data-kind="product" data-act="rejete">Rejeter</button>
+            </td>
+          </tr>`;
+      }).join("");
+
+      box.innerHTML = `<table>
+        <thead><tr><th>Image</th><th>Produit</th><th>Valeurs / 100 g</th><th>Additifs</th><th>Action</th></tr></thead>
+        <tbody>${rows}</tbody></table>`;
+    }
+
+    async function decideProduct(id, action, reason) {
+      const status = action === "valide" ? "valide" : "rejete";
+      const { error } = await sb.from("products")
+        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString() })
+        .eq("id", id);
+      if (error) { alert(error.message); return; }
+      await sb.from("review_log").insert({ table_name: "products", row_id: id, action: status, reason });
+    }
+
+    // ---------- Clics ----------
+    document.querySelector("main").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-act]");
+      if (!btn) return;
+      const id = Number(btn.closest("tr").dataset.id);
+      const act = btn.dataset.act;
+      let reason = null;
+      if (act === "rejete") {
+        reason = (prompt("Raison du rejet (obligatoire) :") || "").trim();
+        if (!reason) return;
+      }
+      if (btn.dataset.kind === "dish") await decideDish(id, act, reason);
+      else await decideProduct(id, act, reason);
+      btn.closest("tr").remove();
+    });
+
+    (async () => {
+      member = await requireTeamMember();
+      if (!member) return;
+      if (member.role === "agent") {
+        document.body.innerHTML = "<p class='notice'>Le compte agent ne valide pas les données.</p>";
+        return;
+      }
+      document.getElementById("side").outerHTML = nav("a-valider.html");
+      wireLogout();
+      document.getElementById("app").hidden = false;
+      loadDishes();
+      loadProducts();
+    })();
+  </script>
+</body>
+</html>

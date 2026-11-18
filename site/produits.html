@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NutriX Data — Produits</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+  <style>
+    .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 22px; }
+    .form label { display: flex; flex-direction: column; font-size: 13px; color: var(--muted); gap: 4px; }
+    .form input, .form select, .form textarea { font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); }
+    .form .wide { grid-column: 1 / -1; }
+    .attrib { font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="app" class="layout" hidden>
+    <div id="side"></div>
+    <main>
+      <h1>Produits</h1>
+
+      <div class="form">
+        <label>Code-barres (ou vide pour un produit sans code)
+          <input id="barcode" placeholder="ex: 6111234567890">
+        </label>
+        <div style="display:flex;align-items:end">
+          <button id="off-fetch" class="accent" type="button">Chercher sur Open Food Facts</button>
+        </div>
+        <p id="off-msg" class="wide muted" hidden></p>
+      </div>
+
+      <form id="product-form" class="form">
+        <label>Nom *<input id="name" required></label>
+        <label>Marque<input id="brand"></label>
+        <label>Quantité (ex: 1 L, 250 g)<input id="quantity"></label>
+        <label>Source *
+          <select id="source">
+            <option value="etiquette">Étiquette (produit marocain)</option>
+            <option value="OpenFoodFacts">Open Food Facts</option>
+          </select>
+        </label>
+        <label class="wide">Ingrédients (texte de l'étiquette)<textarea id="ingredients_text" rows="3"></textarea></label>
+
+        <label>Énergie (kcal / 100 g)<input id="energy_kcal" type="number" step="0.1" min="0"></label>
+        <label>Protéines (g / 100 g)<input id="protein_g" type="number" step="0.01" min="0"></label>
+        <label>Glucides (g / 100 g)<input id="carbs_g" type="number" step="0.01" min="0"></label>
+        <label>Sucres (g / 100 g)<input id="sugars_g" type="number" step="0.01" min="0"></label>
+        <label>Lipides (g / 100 g)<input id="fat_g" type="number" step="0.01" min="0"></label>
+        <label>AG saturés (g / 100 g)<input id="sat_fat_g" type="number" step="0.01" min="0"></label>
+        <label>Fibres (g / 100 g)<input id="fiber_g" type="number" step="0.01" min="0"></label>
+        <label>Sel (g / 100 g)<input id="salt_g" type="number" step="0.001" min="0"></label>
+
+        <label class="wide">Additifs (codes E séparés par des virgules, ex: E330, E951)
+          <input id="additives">
+        </label>
+        <label class="wide">Lien source (optionnel)<input id="source_url" type="url"></label>
+
+        <div class="wide actions">
+          <button class="primary" type="submit">Enregistrer (à valider)</button>
+          <button type="button" id="reset">Vider le formulaire</button>
+          <span id="save-msg" class="muted"></span>
+        </div>
+        <p class="wide attrib" id="attrib" hidden>Données : Open Food Facts, licence ODbL (© les contributeurs Open Food Facts).</p>
+      </form>
+
+      <h2 style="font-size:18px;color:var(--forest)">Derniers produits ajoutés</h2>
+      <div id="recent">Chargement…</div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { sb, esc, requireTeamMember, nav, wireLogout } from "./app.js";
+
+    const $ = (id) => document.getElementById(id);
+    let member = null;
+    let offTags = {};   // e_code -> nom Open Food Facts
+
+    // ---------- Open Food Facts ----------
+    async function fetchOff() {
+      const code = $("barcode").value.trim();
+      const msg = $("off-msg");
+      msg.hidden = false;
+      if (!code) { msg.textContent = "Ktb code-barres l-lowel."; return; }
+      msg.textContent = "Kanqleb...";
+      const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`
+        + `?fields=code,product_name,brands,quantity,ingredients_text,image_front_url,nutriments,additives_tags`;
+      try {
+        const res = await fetch(url);
+        const j = await res.json();
+        if (j.status !== 1) { msg.textContent = "Ma l9inach had produit f Open Food Facts. Dkhlo b yddek."; return; }
+        const p = j.product, n = p.nutriments || {};
+        $("name").value = p.product_name || "";
+        $("brand").value = p.brands || "";
+        $("quantity").value = p.quantity || "";
+        $("ingredients_text").value = p.ingredients_text || "";
+        $("energy_kcal").value = n["energy-kcal_100g"] ?? "";
+        $("protein_g").value = n["proteins_100g"] ?? "";
+        $("carbs_g").value = n["carbohydrates_100g"] ?? "";
+        $("sugars_g").value = n["sugars_100g"] ?? "";
+        $("fat_g").value = n["fat_100g"] ?? "";
+        $("sat_fat_g").value = n["saturated-fat_100g"] ?? "";
+        $("fiber_g").value = n["fiber_100g"] ?? "";
+        $("salt_g").value = n["salt_100g"] ?? "";
+        $("source").value = "OpenFoodFacts";
+        $("source_url").value = `https://world.openfoodfacts.org/product/${code}`;
+        offTags = {};
+        const codes = [];
+        for (const tag of p.additives_tags || []) {
+          const e = tag.replace(/^en:/, "").toUpperCase();
+          if (/^E\d/.test(e)) { codes.push(e); offTags[e] = tag; }
+        }
+        $("additives").value = codes.join(", ");
+        $("attrib").hidden = false;
+        msg.textContent = "Ttli3at men Open Food Facts. Chouf les valeurs w sift.";
+      } catch (e) {
+        msg.textContent = "Ma gedrnach nwslo l Open Food Facts: " + e.message;
+      }
+    }
+
+    // ---------- Enregistrement ----------
+    const num = (id) => {
+      const v = $(id).value.trim();
+      return v === "" ? null : Number(v);
+    };
+
+    function parseCodes(text) {
+      return [...new Set(
+        text.split(",").map((s) => s.trim().toUpperCase()).filter((s) => /^E\d/.test(s))
+      )];
+    }
+
+    async function saveProduct(e) {
+      e.preventDefault();
+      const msg = $("save-msg");
+      let barcode = $("barcode").value.trim();
+      if (!barcode) barcode = "LOCAL-" + Date.now();
+
+      const row = {
+        barcode,
+        name: $("name").value.trim(),
+        brand: $("brand").value.trim() || null,
+        quantity: $("quantity").value.trim() || null,
+        ingredients_text: $("ingredients_text").value.trim() || null,
+        energy_kcal: num("energy_kcal"), protein_g: num("protein_g"),
+        carbs_g: num("carbs_g"), sugars_g: num("sugars_g"),
+        fat_g: num("fat_g"), sat_fat_g: num("sat_fat_g"),
+        fiber_g: num("fiber_g"), salt_g: num("salt_g"),
+        source: $("source").value,
+        source_url: $("source_url").value.trim() || null,
+        status: "a_valider",
+      };
+
+      msg.textContent = "Kanseggel...";
+      const { data: saved, error } = await sb.from("products")
+        .upsert(row, { onConflict: "barcode" }).select("id").single();
+      if (error) { msg.textContent = "Erreur: " + error.message; return; }
+
+      // Additifs : créer si absent, puis relier au produit
+      const codes = parseCodes($("additives").value);
+      if (codes.length) {
+        const rowsAdd = codes.map((c) => ({
+          e_code: c, name_fr: c, off_tag: offTags[c] || null,
+        }));
+        const { error: addErr } = await sb.from("additives")
+          .upsert(rowsAdd, { onConflict: "e_code", ignoreDuplicates: true });
+        if (addErr) { msg.textContent = "Erreur additifs: " + addErr.message; return; }
+        const { data: found } = await sb.from("additives").select("id,e_code").in("e_code", codes);
+        await sb.from("product_additives").delete().eq("product_id", saved.id);
+        const links = (found || []).map((a) => ({ product_id: saved.id, additive_id: a.id }));
+        if (links.length) await sb.from("product_additives").insert(links);
+      } else {
+        await sb.from("product_additives").delete().eq("product_id", saved.id);
+      }
+
+      msg.textContent = "Tsajel. Ghadi y9ra f À valider.";
+      $("product-form").reset();
+      $("attrib").hidden = true;
+      offTags = {};
+      loadRecent();
+    }
+
+    async function loadRecent() {
+      const { data, error } = await sb.from("products")
+        .select("barcode, name, brand, status, source, created_at")
+        .order("created_at", { ascending: false }).limit(20);
+      if (error) { $("recent").innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
+      $("recent").innerHTML = data.length ? `<table>
+        <thead><tr><th>Nom</th><th>Marque</th><th>Code</th><th>Source</th><th>Statut</th></tr></thead>
+        <tbody>${data.map((p) => `<tr>
+          <td>${esc(p.name)}</td><td>${esc(p.brand || "")}</td><td>${esc(p.barcode)}</td>
+          <td>${esc(p.source)}</td>
+          <td><span class="tag ${p.status === "valide" ? "ok" : "warn"}">${esc(p.status)}</span></td>
+        </tr>`).join("")}</tbody></table>`
+        : `<p class="muted">Ma kayn ta produit mazal.</p>`;
+    }
+
+    (async () => {
+      member = await requireTeamMember();
+      if (!member) return;
+      if (member.role === "agent") {
+        document.body.innerHTML = "<p class='notice'>Le compte agent ne saisit pas les produits ici.</p>";
+        return;
+      }
+      $("side").outerHTML = nav("produits.html");
+      wireLogout();
+      $("app").hidden = false;
+      $("off-fetch").addEventListener("click", fetchOff);
+      $("product-form").addEventListener("submit", saveProduct);
+      $("reset").addEventListener("click", () => { $("product-form").reset(); offTags = {}; $("attrib").hidden = true; });
+      loadRecent();
+    })();
+  </script>
+</body>
+</html>
