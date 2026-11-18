@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NutriX Data — Modifier</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+  <style>
+    .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 22px; }
+    .form label { display: flex; flex-direction: column; font-size: 13px; color: var(--muted); gap: 4px; }
+    .form input, .form select, .form textarea, table input, table select { font: inherit; padding: 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); width: 100%; }
+    .form .wide { grid-column: 1 / -1; }
+    h2 { font-size: 17px; color: var(--forest); margin: 26px 0 10px; }
+    .head { display: flex; gap: 16px; align-items: center; margin-bottom: 18px; }
+    .head img { width: 110px; height: 110px; object-fit: cover; border-radius: 12px; background: #fff; border: 1px solid var(--line); }
+    .totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 12px 0 4px; }
+    .totals .card .n { font-size: 22px; }
+    .bar { position: sticky; bottom: 0; background: var(--paper); border-top: 1px solid var(--line); padding: 12px 0; margin-top: 20px; }
+    td.num { width: 110px; }
+    td.del { width: 40px; }
+    details { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; margin-top: 12px; }
+    details summary { cursor: pointer; color: var(--purple); font-weight: 600; }
+    #msg { margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <div id="app" class="layout" hidden>
+    <div id="side"></div>
+    <main id="main"><p class="muted">Chargement…</p></main>
+  </div>
+
+  <script type="module">
+    import { sb, esc, requireTeamMember, nav, wireLogout } from "./app.js";
+
+    const params = new URLSearchParams(location.search);
+    const dishId = Number(params.get("plat")) || null;
+    const productId = Number(params.get("produit")) || null;
+    const main = document.getElementById("main");
+    let member = null;
+
+    const num = (v) => (v === "" || v === null || v === undefined || isNaN(Number(v))) ? null : Number(v);
+    const val = (id) => document.getElementById(id).value.trim();
+    const fmt = (x, d = 1) => (x === null || x === undefined || isNaN(x)) ? "–" : Number(x).toFixed(d);
+    function say(text, bad) {
+      const m = document.getElementById("msg");
+      m.textContent = text; m.className = bad ? "tag warn" : "tag ok";
+    }
+    async function log(table, rowId, action, reason) {
+      await sb.from("review_log").insert({ table_name: table, row_id: rowId, action, reason: reason || null });
+    }
+
+    // =====================================================================
+    // PLAT
+    // =====================================================================
+    let ingredients = [];   // base scientifique
+    let recipe = null;      // dernière recette
+    let lines = [];         // lignes en cours d'édition
+    let removed = [];       // ids de lignes à supprimer
+
+    async function loadIngredients() {
+      const { data, error } = await sb.from("ingredients")
+        .select("id, name_fr, name_darija, source, source_code, energy_kcal, protein_g, carbs_g, fat_g, fiber_g, salt_g")
+        .order("name_fr");
+      if (error) throw error;
+      ingredients = data;
+    }
+
+    function ingredientOptions(selected) {
+      return `<option value="">— non relié —</option>` + ingredients.map((i) =>
+        `<option value="${i.id}" ${i.id === selected ? "selected" : ""}>${esc(i.name_fr)} · ${esc(i.source)} ${esc(i.source_code || "")} · ${fmt(i.energy_kcal, 0)} kcal</option>`
+      ).join("");
+    }
+
+    function renderLines() {
+      const body = document.getElementById("lines");
+      body.innerHTML = lines.map((l, k) => `
+        <tr data-k="${k}">
+          <td><input data-f="raw_label" value="${esc(l.raw_label)}" placeholder="ex: 3 c. à soupe d'huile d'olive"></td>
+          <td class="num"><input data-f="grams" type="number" step="0.1" min="0.1" value="${l.grams ?? ""}"></td>
+          <td><select data-f="ingredient_id">${ingredientOptions(l.ingredient_id)}</select></td>
+          <td class="del"><button type="button" data-del="${k}" title="Supprimer">✕</button></td>
+        </tr>`).join("") || `<tr><td colspan="4" class="muted">Aucune ligne.</td></tr>`;
+      computePreview();
+    }
+
+    // Même formule que la vue dish_nutrition (méthode des recettes)
+    function computePreview() {
+      const byId = Object.fromEntries(ingredients.map((i) => [i.id, i]));
+      let raw = 0, kcal = 0, p = 0, g = 0, l = 0, f = 0, s = 0, unlinked = 0;
+      for (const ln of lines) {
+        const w = num(ln.grams) || 0; raw += w;
+        const i = byId[ln.ingredient_id];
+        if (!i) { unlinked++; continue; }
+        kcal += w * (i.energy_kcal || 0) / 100; p += w * (i.protein_g || 0) / 100;
+        g += w * (i.carbs_g || 0) / 100; l += w * (i.fat_g || 0) / 100;
+        f += w * (i.fiber_g || 0) / 100; s += w * (i.salt_g || 0) / 100;
+      }
+      const cooked = num(document.getElementById("cooked_weight_g")?.value);
+      const final = cooked || raw;
+      const per = (x) => final ? x / final * 100 : null;
+      const atw = kcal ? Math.abs((4 * p + 4 * g + 9 * l + 2 * f) - kcal) / kcal * 100 : null;
+      document.getElementById("preview").innerHTML = `
+        <div class="card"><div class="n">${fmt(per(kcal))}</div><div class="l">kcal / 100 g</div></div>
+        <div class="card"><div class="n">${fmt(per(p), 2)}</div><div class="l">Protéines g</div></div>
+        <div class="card"><div class="n">${fmt(per(g), 2)}</div><div class="l">Glucides g</div></div>
+        <div class="card"><div class="n">${fmt(per(l), 2)}</div><div class="l">Lipides g</div></div>
+        <div class="card"><div class="n">${fmt(per(f), 2)}</div><div class="l">Fibres g</div></div>
+        <div class="card"><div class="n">${fmt(per(s), 2)}</div><div class="l">Sel g</div></div>`;
+      document.getElementById("preview-info").innerHTML =
+        `Poids cru ${fmt(raw, 0)} g · poids final ${fmt(final, 0)} g${cooked ? " (après cuisson)" : " (cru, pas de poids après cuisson)"}`
+        + (atw !== null ? ` · <span class="tag ${atw > 15 ? "warn" : "ok"}">Atwater ${fmt(atw)} %</span>` : "")
+        + (unlinked ? ` · <span class="tag warn">${unlinked} ligne(s) non reliée(s)</span>` : "");
+    }
+
+    async function loadDish() {
+      await loadIngredients();
+      const { data: d, error } = await sb.from("dishes").select("*").eq("id", dishId).single();
+      if (error) throw error;
+      const { data: recs } = await sb.from("recipes").select("*").eq("dish_id", dishId)
+        .order("version", { ascending: false }).limit(1);
+      recipe = recs?.[0] || null;
+      if (recipe) {
+        const { data: rl } = await sb.from("recipe_ingredients").select("*").eq("recipe_id", recipe.id).order("id");
+        lines = (rl || []).map((x) => ({ ...x }));
+      }
+      const srcs = (recipe?.sources || []).filter((s) => /^https?:\/\//.test(s.url || ""))
+        .map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a>`).join(" · ");
+      const img = /^https:\/\//.test(d.image_url || "") ? `<img src="${esc(d.image_url)}" alt="">` : "";
+
+      main.innerHTML = `
+        <div class="head">${img}<div>
+          <h1 style="margin:0">Modifier : ${esc(d.name_fr)}</h1>
+          <span class="tag">${esc(d.status)}</span> <span class="muted">${srcs || "aucune source"}</span>
+        </div></div>
+
+        <h2>Plat</h2>
+        <div class="form">
+          <label>Nom (français) *<input id="name_fr" value="${esc(d.name_fr)}"></label>
+          <label>Nom (darija)<input id="name_darija" value="${esc(d.name_darija || "")}"></label>
+          <label>Nom (arabe)<input id="name_ar" dir="rtl" value="${esc(d.name_ar || "")}"></label>
+          <label>Catégorie<input id="category" value="${esc(d.category || "")}"></label>
+          <label>Région<input id="region" value="${esc(d.region || "")}"></label>
+          <label>Portion habituelle (g)<input id="portion_g" type="number" step="1" min="0" value="${d.portion_g ?? ""}"></label>
+          <label>Confiance
+            <select id="confidence">
+              ${["", "haute", "moyenne", "faible"].map((c) => `<option value="${c}" ${c === (d.confidence || "") ? "selected" : ""}>${c || "—"}</option>`).join("")}
+            </select></label>
+          <label>Image (URL https)<input id="image_url" value="${esc(d.image_url || "")}"></label>
+          <label class="wide">Notes de méthode<textarea id="method_notes" rows="3">${esc(d.method_notes || "")}</textarea></label>
+        </div>
+
+        <h2>Recette ${recipe ? "(version " + recipe.version + ")" : ""}</h2>
+        <div class="form">
+          <label>Nombre de portions<input id="servings" type="number" min="1" value="${recipe?.servings ?? ""}"></label>
+          <label>Poids après cuisson (g)<input id="cooked_weight_g" type="number" step="1" min="0" value="${recipe?.cooked_weight_g ?? ""}"></label>
+          <label class="wide">Notes recette<textarea id="r_notes" rows="2">${esc(recipe?.notes || "")}</textarea></label>
+        </div>
+
+        <h2>Ingrédients</h2>
+        <p class="muted">Grammes = poids cru, partie comestible. Pense à la matière grasse de cuisson (huile, smen, beurre).</p>
+        <table>
+          <thead><tr><th>Texte d'origine</th><th>Grammes</th><th>Ingrédient de la base (valeurs / 100 g)</th><th></th></tr></thead>
+          <tbody id="lines"></tbody>
+        </table>
+        <p><button type="button" id="add-line" class="accent">+ Ajouter une ligne</button></p>
+
+        <details id="new-ingr">
+          <summary>+ Ajouter un nouvel ingrédient à la base (avec sa source)</summary>
+          <div class="form" style="border:none;padding:12px 0 0;margin:0">
+            <label>Nom (français) *<input id="ni_name"></label>
+            <label>Nom (darija)<input id="ni_darija"></label>
+            <label>Source *
+              <select id="ni_source">${["CIQUAL", "TMCA", "USDA", "etiquette", "labo"].map((s) => `<option>${s}</option>`).join("")}</select></label>
+            <label>Code dans la source<input id="ni_code" placeholder="ex: 20047"></label>
+            <label class="wide">Lien source<input id="ni_url" type="url"></label>
+            <label>Énergie kcal *<input id="ni_kcal" type="number" step="0.1" min="0"></label>
+            <label>Protéines g *<input id="ni_p" type="number" step="0.01" min="0" max="100"></label>
+            <label>Glucides disponibles g *<input id="ni_g" type="number" step="0.01" min="0" max="100"></label>
+            <label>Sucres g<input id="ni_sug" type="number" step="0.01" min="0" max="100"></label>
+            <label>Lipides g *<input id="ni_l" type="number" step="0.01" min="0" max="100"></label>
+            <label>AG saturés g<input id="ni_sat" type="number" step="0.01" min="0" max="100"></label>
+            <label>Fibres g<input id="ni_f" type="number" step="0.01" min="0" max="100"></label>
+            <label>Sel g<input id="ni_salt" type="number" step="0.001" min="0" max="100"></label>
+            <label>Eau g<input id="ni_w" type="number" step="0.01" min="0" max="100"></label>
+            <div class="wide"><button type="button" id="ni_save" class="primary">Ajouter à la base</button>
+              <span class="muted">Valeurs pour 100 g, recopiées de la source.</span></div>
+          </div>
+        </details>
+
+        <h2>Aperçu du calcul (avant enregistrement)</h2>
+        <div class="totals" id="preview"></div>
+        <p class="muted" id="preview-info"></p>
+
+        <div class="bar actions">
+          <button type="button" id="save" class="primary">Enregistrer</button>
+          <button type="button" id="save-validate" class="accent">Enregistrer et valider</button>
+          <a href="a-valider.html"><button type="button">Retour</button></a>
+          <span id="msg"></span>
+        </div>`;
+
+      renderLines();
+
+      const tbody = document.getElementById("lines");
+      tbody.addEventListener("input", (e) => {
+        const tr = e.target.closest("tr[data-k]"); if (!tr) return;
+        const l = lines[Number(tr.dataset.k)]; const f = e.target.dataset.f;
+        l[f] = f === "ingredient_id" ? (num(e.target.value)) : e.target.value;
+        computePreview();
+      });
+      tbody.addEventListener("change", (e) => {
+        if (e.target.dataset.f === "ingredient_id") {
+          lines[Number(e.target.closest("tr").dataset.k)].ingredient_id = num(e.target.value);
+          computePreview();
+        }
+      });
+      tbody.addEventListener("click", (e) => {
+        const k = e.target.dataset.del; if (k === undefined) return;
+        const [l] = lines.splice(Number(k), 1);
+        if (l.id) removed.push(l.id);
+        renderLines();
+      });
+      document.getElementById("add-line").onclick = () => {
+        lines.push({ raw_label: "", grams: "", ingredient_id: null }); renderLines();
+      };
+      document.getElementById("cooked_weight_g").oninput = computePreview;
+      document.getElementById("ni_save").onclick = addIngredient;
+      document.getElementById("save").onclick = () => saveDish(false);
+      document.getElementById("save-validate").onclick = () => saveDish(true);
+    }
+
+    async function addIngredient() {
+      const row = {
+        name_fr: val("ni_name"), name_darija: val("ni_darija") || null,
+        source: val("ni_source"), source_code: val("ni_code") || null, source_url: val("ni_url") || null,
+        energy_kcal: num(val("ni_kcal")), protein_g: num(val("ni_p")), carbs_g: num(val("ni_g")),
+        sugars_g: num(val("ni_sug")), fat_g: num(val("ni_l")), sat_fat_g: num(val("ni_sat")),
+        fiber_g: num(val("ni_f")), salt_g: num(val("ni_salt")), water_g: num(val("ni_w")),
+      };
+      if (!row.name_fr || [row.energy_kcal, row.protein_g, row.carbs_g, row.fat_g].some((x) => x === null)) {
+        say("Nom, énergie, protéines, glucides et lipides sont obligatoires.", true); return;
+      }
+      const { error } = await sb.from("ingredients").insert(row);
+      if (error) { say(error.message, true); return; }
+      await loadIngredients();
+      renderLines();
+      document.getElementById("new-ingr").open = false;
+      ["ni_name", "ni_darija", "ni_code", "ni_url", "ni_kcal", "ni_p", "ni_g", "ni_sug", "ni_l", "ni_sat", "ni_f", "ni_salt", "ni_w"]
+        .forEach((id) => { document.getElementById(id).value = ""; });
+      say(`« ${row.name_fr} » ajouté : choisis-le dans une ligne.`);
+    }
+
+    async function saveDish(validate) {
+      if (!val("name_fr")) { say("Le nom est obligatoire.", true); return; }
+      for (const l of lines) {
+        if (!String(l.raw_label || "").trim() || !(num(l.grams) > 0)) {
+          say("Chaque ligne doit avoir un texte et des grammes > 0.", true); return;
+        }
+      }
+      const img = val("image_url");
+      if (img && !/^https:\/\//.test(img)) { say("L'image doit être une URL https.", true); return; }
+
+      const dishUpd = {
+        name_fr: val("name_fr"), name_darija: val("name_darija") || null, name_ar: val("name_ar") || null,
+        category: val("category") || null, region: val("region") || null, portion_g: num(val("portion_g")),
+        confidence: val("confidence") || null, image_url: img || null, method_notes: val("method_notes") || null,
+      };
+      if (validate) Object.assign(dishUpd, { status: "valide", validated_by: member.user.id, validated_at: new Date().toISOString() });
+      let { error } = await sb.from("dishes").update(dishUpd).eq("id", dishId);
+      if (error) { say(error.message, true); return; }
+
+      if (!recipe) {
+        const { data, error: e2 } = await sb.from("recipes")
+          .insert({ dish_id: dishId, version: 1, status: validate ? "valide" : "a_valider" }).select().single();
+        if (e2) { say(e2.message, true); return; }
+        recipe = data;
+      }
+      const recUpd = { servings: num(val("servings")), cooked_weight_g: num(val("cooked_weight_g")), notes: val("r_notes") || null };
+      if (validate) recUpd.status = "valide";
+      ({ error } = await sb.from("recipes").update(recUpd).eq("id", recipe.id));
+      if (error) { say(error.message, true); return; }
+
+      if (removed.length) {
+        ({ error } = await sb.from("recipe_ingredients").delete().in("id", removed));
+        if (error) { say(error.message, true); return; }
+        removed = [];
+      }
+      for (const l of lines) {
+        const row = { raw_label: String(l.raw_label).trim(), grams: num(l.grams), ingredient_id: l.ingredient_id || null };
+        if (l.id) ({ error } = await sb.from("recipe_ingredients").update(row).eq("id", l.id));
+        else {
+          const { data, error: e3 } = await sb.from("recipe_ingredients").insert({ ...row, recipe_id: recipe.id }).select().single();
+          error = e3; if (data) l.id = data.id;
+        }
+        if (error) { say(error.message, true); return; }
+      }
+
+      await log("dishes", dishId, "modifie", "Modification manuelle");
+      if (validate) await log("dishes", dishId, "valide", null);
+
+      const { data: n } = await sb.from("dish_nutrition").select("energy_kcal_100g").eq("dish_id", dishId).maybeSingle();
+      say(validate
+        ? `Enregistré et validé ✓ (${fmt(n?.energy_kcal_100g)} kcal / 100 g)`
+        : `Enregistré ✓ (${fmt(n?.energy_kcal_100g)} kcal / 100 g) — toujours à valider`);
+    }
+
+    // =====================================================================
+    // PRODUIT
+    // =====================================================================
+    async function loadProduct() {
+      const { data: p, error } = await sb.from("products")
+        .select("*, product_additives(additives(e_code))").eq("id", productId).single();
+      if (error) throw error;
+      const adds = (p.product_additives || []).map((x) => x.additives?.e_code).filter(Boolean).join(", ");
+      const f = (id, label, step = "0.01") =>
+        `<label>${label}<input id="${id}" type="number" step="${step}" min="0" value="${p[id] ?? ""}"></label>`;
+      const img = /^https:\/\//.test(p.image_url || "") ? `<img src="${esc(p.image_url)}" alt="" style="object-fit:contain">` : "";
+
+      main.innerHTML = `
+        <div class="head">${img}<div>
+          <h1 style="margin:0">Modifier : ${esc(p.name)}</h1>
+          <span class="tag">${esc(p.status)}</span> <span class="muted">${esc(p.barcode)}</span>
+          ${/^https?:\/\//.test(p.source_url || "") ? ` · <a class="muted" href="${esc(p.source_url)}" target="_blank" rel="noopener">source</a>` : ""}
+        </div></div>
+        <div class="form">
+          <label>Nom *<input id="name" value="${esc(p.name)}"></label>
+          <label>Marque<input id="brand" value="${esc(p.brand || "")}"></label>
+          <label>Quantité<input id="quantity" value="${esc(p.quantity || "")}"></label>
+          <label>Image (URL https)<input id="image_url" value="${esc(p.image_url || "")}"></label>
+          <label class="wide">Ingrédients (étiquette)<textarea id="ingredients_text" rows="3">${esc(p.ingredients_text || "")}</textarea></label>
+          ${f("energy_kcal", "Énergie (kcal / 100 g)", "0.1")}
+          ${f("protein_g", "Protéines (g / 100 g)")}
+          ${f("carbs_g", "Glucides (g / 100 g)")}
+          ${f("sugars_g", "Sucres (g / 100 g)")}
+          ${f("fat_g", "Lipides (g / 100 g)")}
+          ${f("sat_fat_g", "AG saturés (g / 100 g)")}
+          ${f("fiber_g", "Fibres (g / 100 g)")}
+          ${f("salt_g", "Sel (g / 100 g)", "0.001")}
+          <label class="wide">Additifs (codes E séparés par des virgules)<input id="additives" value="${esc(adds)}"></label>
+        </div>
+        <div class="bar actions">
+          <button type="button" id="save" class="primary">Enregistrer</button>
+          <button type="button" id="save-validate" class="accent">Enregistrer et valider</button>
+          <a href="a-valider.html"><button type="button">Retour</button></a>
+          <span id="msg"></span>
+        </div>`;
+      document.getElementById("save").onclick = () => saveProduct(false);
+      document.getElementById("save-validate").onclick = () => saveProduct(true);
+    }
+
+    async function saveProduct(validate) {
+      if (!val("name")) { say("Le nom est obligatoire.", true); return; }
+      const img = val("image_url");
+      if (img && !/^https:\/\//.test(img)) { say("L'image doit être une URL https.", true); return; }
+      const upd = {
+        name: val("name"), brand: val("brand") || null, quantity: val("quantity") || null,
+        image_url: img || null, ingredients_text: val("ingredients_text") || null,
+      };
+      for (const k of ["energy_kcal", "protein_g", "carbs_g", "sugars_g", "fat_g", "sat_fat_g", "fiber_g", "salt_g"]) upd[k] = num(val(k));
+      if (upd.sugars_g !== null && upd.carbs_g !== null && upd.sugars_g > upd.carbs_g) { say("Sucres > glucides : vérifie.", true); return; }
+      if (validate) Object.assign(upd, { status: "valide", validated_by: member.user.id, validated_at: new Date().toISOString() });
+      let { error } = await sb.from("products").update(upd).eq("id", productId);
+      if (error) { say(error.message, true); return; }
+
+      // Additifs : on remplace la liste
+      const codes = [...new Set(val("additives").toUpperCase().split(/[,\s]+/).filter((c) => /^E\d{3,4}[A-Z]?$/.test(c)))];
+      ({ error } = await sb.from("product_additives").delete().eq("product_id", productId));
+      if (error) { say(error.message, true); return; }
+      for (const code of codes) {
+        let { data: a } = await sb.from("additives").select("id").eq("e_code", code).maybeSingle();
+        if (!a) {
+          const r = await sb.from("additives").insert({ e_code: code, name_fr: code, off_tag: "en:" + code.toLowerCase() }).select("id").single();
+          if (r.error) { say(r.error.message, true); return; }
+          a = r.data;
+        }
+        ({ error } = await sb.from("product_additives").insert({ product_id: productId, additive_id: a.id }));
+        if (error) { say(error.message, true); return; }
+      }
+      await log("products", productId, "modifie", "Modification manuelle");
+      if (validate) await log("products", productId, "valide", null);
+      say(validate ? "Enregistré et validé ✓" : "Enregistré ✓ — toujours à valider");
+    }
+
+    // =====================================================================
+    (async () => {
+      member = await requireTeamMember();
+      if (!member) return;
+      if (member.role === "agent") { document.body.innerHTML = "<p class='notice'>Le compte agent ne modifie pas les données.</p>"; return; }
+      document.getElementById("side").outerHTML = nav("a-valider.html");
+      wireLogout();
+      document.getElementById("app").hidden = false;
+      try {
+        if (dishId) await loadDish();
+        else if (productId) await loadProduct();
+        else main.innerHTML = `<p class="notice">Rien à modifier. <a href="a-valider.html">Retour</a></p>`;
+      } catch (err) {
+        main.innerHTML = `<p class="notice">Erreur : ${esc(err.message || err)}</p>`;
+      }
+    })();
+  </script>
+</body>
+</html>
