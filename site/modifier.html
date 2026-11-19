@@ -31,7 +31,7 @@
   </div>
 
   <script type="module">
-    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge } from "./app.js";
+    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, nutrixRating, ratingBadge } from "./app.js";
 
     const params = new URLSearchParams(location.search);
     const dishId = Number(params.get("plat")) || null;
@@ -175,7 +175,8 @@
         <div class="card"><div class="n">${fmt(per(f), 2)}</div><div class="l">Fibres g</div></div>
         <div class="card"><div class="n">${fmt(per(s), 2)}</div><div class="l">Sel g</div></div>
         <div class="card"><div class="n">${nutriBadge(ns.grade, ns.score ?? "")}</div><div class="l">Nutri-Score (${ns.score ?? "–"})</div></div>
-        <div class="card"><div class="n">${novaBadge(nova)}</div><div class="l">${manual ? "NOVA choisi à la main" : "NOVA estimé (ingrédients)"}</div></div>`;
+        <div class="card"><div class="n">${novaBadge(nova)}</div><div class="l">${manual ? "NOVA choisi à la main" : "NOVA estimé (ingrédients)"}</div></div>
+        <div class="card"><div class="n">${ratingBadge(unlinked ? null : nutrixRating(ns.score, nova))}</div><div class="l">Note NutriX</div></div>`;
       document.getElementById("preview-info").innerHTML =
         `Poids cru ${fmt(raw, 0)} g · poids final ${fmt(final, 0)} g${cooked ? " (après cuisson)" : " (cru, pas de poids après cuisson)"}`
         + (atw !== null ? ` · <span class="tag ${atw > 15 ? "warn" : "ok"}">Atwater ${fmt(atw)} %</span>` : "")
@@ -431,7 +432,7 @@
             <select id="nova_group">
               ${["", 1, 2, 3, 4].map((n) => `<option value="${n}" ${String(n) === String(p.nova_group ?? "") ? "selected" : ""}>${n ? "NOVA " + n : "—"}</option>`).join("")}
             </select></label>
-          <div class="wide scores">Actuel : ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
+          <div class="wide scores">Actuel : ${ratingBadge(p.rating)} ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
             ${p.nova_source === "estimation_ia" ? `<span class="tag warn" title="NOVA estimé par l'IA depuis la liste d'ingrédients">NOVA IA</span>` : ""}
             ${p.values_source === "photo_etiquette_ia" ? `<span class="tag warn" title="Valeurs lues par l'IA sur la photo de l'étiquette">valeurs IA</span>` : ""}
             <span class="muted">${p.scores_source === "OpenFoodFacts" ? "Nutri-Score officiel (Open Food Facts)" : p.scores_source === "calcul" ? "Nutri-Score estimé par NutriX (algorithme général, faux pour boissons, huiles et fromages : mets la note officielle)" : ""}</span></div>

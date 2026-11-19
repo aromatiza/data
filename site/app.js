@@ -36,6 +36,7 @@ export function nav(active) {
   const items = [
     ["index.html", "Tableau de bord"],
     ["a-valider.html", "À valider"],
+    ["valides.html", "Validés"],
     ["produits.html", "Produits"],
   ];
   return `<nav class="side">
@@ -63,4 +64,18 @@ export function novaBadge(group, title = "") {
   const n = Number(group);
   const ok = [1, 2, 3, 4].includes(n);
   return `<span class="nova nova-${ok ? n : "x"}" title="NOVA ${esc(title)}">NOVA ${ok ? n : "?"}</span>`;
+}
+
+// Note NutriX /100 (même formule que la fonction SQL nutrix_rating) :
+// 70 % points Nutri-Score 2023 (-6 → 100, 30 → 0) + 30 % NOVA (1 → 100, 2 → 80, 3 → 60, 4 → 20)
+export function nutrixRating(nsScore, nova) {
+  if (nsScore === null || nsScore === undefined || isNaN(nsScore)) return null;
+  const nut = Math.max(0, Math.min(100, (30 - nsScore) / 36 * 100));
+  const nv = { 1: 100, 2: 80, 3: 60, 4: 20 }[Number(nova)];
+  return Math.round(nv === undefined ? nut : 0.7 * nut + 0.3 * nv);
+}
+export function ratingBadge(r) {
+  if (r === null || r === undefined) return `<span class="rate rate-x" title="Note NutriX indisponible">–/100</span>`;
+  const c = r >= 75 ? "g" : r >= 50 ? "y" : r >= 25 ? "o" : "r";
+  return `<span class="rate rate-${c}" title="Note NutriX : 70 % Nutri-Score + 30 % NOVA">${r}<small>/100</small></span>`;
 }

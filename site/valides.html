@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NutriX Data — Validés</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+  <style>
+    .bar2 { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+    .bar2 input, .bar2 select { font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+    .bar2 input { flex: 1; min-width: 200px; }
+    .thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; background: #fff; display: block; }
+    .thumb.c { object-fit: contain; }
+  </style>
+</head>
+<body>
+  <div id="app" class="layout" hidden>
+    <div id="side"></div>
+    <main>
+      <h1>Validés</h1>
+      <p class="muted">Données validées par l'équipe : ce sont elles que l'application NutriX utilise (scanner et cuisine marocaine).
+        La note /100 = 70 % Nutri-Score + 30 % NOVA.</p>
+      <div class="bar2">
+        <input id="q" type="search" placeholder="Chercher un plat, un produit, une marque, un code-barres…">
+        <select id="sort">
+          <option value="rating">Trier : meilleure note</option>
+          <option value="rating_asc">Trier : note la plus basse</option>
+          <option value="name">Trier : nom</option>
+          <option value="recent">Trier : validés récemment</option>
+        </select>
+      </div>
+      <h2 style="font-size:18px;color:var(--forest)">Plats <span class="tag" id="nd">…</span></h2>
+      <div id="dishes">Chargement…</div>
+      <h2 style="font-size:18px;color:var(--forest);margin-top:30px">Produits <span class="tag" id="np">…</span></h2>
+      <div id="products">Chargement…</div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, ratingBadge } from "./app.js";
+
+    let dishes = [], products = [];
+    const norm = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    const fmtDate = (d) => d ? new Date(d).toLocaleDateString("fr-FR") : "–";
+
+    function sorted(list, nameKey) {
+      const by = document.getElementById("sort").value;
+      const l = list.slice();
+      if (by === "rating") l.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1));
+      if (by === "rating_asc") l.sort((a, b) => (a.rating ?? 999) - (b.rating ?? 999));
+      if (by === "name") l.sort((a, b) => String(a[nameKey]).localeCompare(String(b[nameKey]), "fr"));
+      if (by === "recent") l.sort((a, b) => String(b.validated_at || "").localeCompare(String(a.validated_at || "")));
+      return l;
+    }
+
+    function render() {
+      const q = norm(document.getElementById("q").value.trim());
+      const ds = sorted(dishes.filter((d) => !q || norm(d.name_fr + " " + (d.name_darija || "") + " " + (d.name_ar || "")).includes(q)), "name_fr");
+      const ps = sorted(products.filter((p) => !q || norm(p.name + " " + (p.brand || "") + " " + p.barcode).includes(q)), "name");
+      document.getElementById("nd").textContent = ds.length;
+      document.getElementById("np").textContent = ps.length;
+
+      document.getElementById("dishes").innerHTML = ds.length ? `<table>
+        <thead><tr><th></th><th>Plat</th><th>Note</th><th>Valeurs / 100 g</th><th>Validé le</th><th></th></tr></thead><tbody>
+        ${ds.map((d) => `<tr>
+          <td>${/^https:\/\//.test(d.image_url || "") ? `<img class="thumb" src="${esc(d.image_url)}" alt="" loading="lazy">` : `<span class="tag warn">pas d'image</span>`}</td>
+          <td><b>${esc(d.name_fr)}</b>${d.name_darija ? ` · ${esc(d.name_darija)}` : ""}<br><span class="muted">${esc(d.category || "")}${d.region ? " · " + esc(d.region) : ""}</span></td>
+          <td><div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group)}</div></td>
+          <td>${d.energy_kcal_100g ?? "–"} kcal<br><span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"}</span></td>
+          <td>${fmtDate(d.validated_at)}</td>
+          <td><a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a></td>
+        </tr>`).join("")}</tbody></table>` : `<p class="muted">Aucun plat validé${q ? " pour cette recherche" : ""}.</p>`;
+
+      document.getElementById("products").innerHTML = ps.length ? `<table>
+        <thead><tr><th></th><th>Produit</th><th>Note</th><th>Valeurs / 100 g</th><th>Validé le</th><th></th></tr></thead><tbody>
+        ${ps.map((p) => `<tr>
+          <td>${/^https:\/\//.test(p.image_url || "") ? `<img class="thumb c" src="${esc(p.image_url)}" alt="" loading="lazy">` : `<span class="tag warn">pas d'image</span>`}</td>
+          <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span></td>
+          <td><div class="scores">${ratingBadge(p.rating)} ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
+            ${p.scores_source === "calcul" ? `<span class="tag warn">estimé</span>` : ""}${p.nova_source === "estimation_ia" ? ` <span class="tag warn">NOVA IA</span>` : ""}</div></td>
+          <td>${p.energy_kcal ?? "–"} kcal<br><span class="muted">sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g</span></td>
+          <td>${fmtDate(p.validated_at)}</td>
+          <td><a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a></td>
+        </tr>`).join("")}</tbody></table>` : `<p class="muted">Aucun produit validé${q ? " pour cette recherche" : ""}.</p>`;
+    }
+
+    async function load() {
+      const [n, d, p] = await Promise.all([
+        sb.from("dish_nutrition").select("*").eq("status", "valide"),
+        sb.from("dishes").select("id, name_darija, name_ar, category, region, image_url, validated_at").eq("status", "valide"),
+        sb.from("products").select("id, barcode, name, brand, image_url, energy_kcal, sugars_g, salt_g, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, rating, validated_at").eq("status", "valide"),
+      ]);
+      const err = n.error || d.error || p.error;
+      if (err) { document.getElementById("dishes").innerHTML = `<p class="notice">${esc(err.message)}</p>`; return; }
+      const info = Object.fromEntries(d.data.map((x) => [x.id, x]));
+      dishes = n.data.map((x) => ({ ...x, ...(info[x.dish_id] || {}) }));
+      products = p.data;
+      render();
+    }
+
+    (async () => {
+      const member = await requireTeamMember();
+      if (!member) return;
+      document.getElementById("side").outerHTML = nav("valides.html");
+      wireLogout();
+      document.getElementById("app").hidden = false;
+      document.getElementById("q").addEventListener("input", render);
+      document.getElementById("sort").addEventListener("change", render);
+      load();
+    })();
+  </script>
+</body>
+</html>
