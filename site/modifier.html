@@ -352,7 +352,7 @@
         nova_manual: num(val("nova_manual")),
         nova_source: num(val("nova_manual")) ? "manuel" : null,
       };
-      if (validate) Object.assign(dishUpd, { status: "valide", validated_by: member.user.id, validated_at: new Date().toISOString() });
+      if (validate) Object.assign(dishUpd, { status: "valide", validated_source: "humain", validated_by: member.user.id, validated_at: new Date().toISOString() });
       let { error } = await sb.from("dishes").update(dishUpd).eq("id", dishId);
       if (error) { say(error.message, true); return; }
 
@@ -480,7 +480,7 @@
       upd.nova_group = num(val("nova_group"));
       if (upd.nova_group !== window.__novaInit) upd.nova_source = upd.nova_group ? "manuel" : null;
       if (upd.sugars_g !== null && upd.carbs_g !== null && upd.sugars_g > upd.carbs_g) { say("Sucres > glucides : vérifie.", true); return; }
-      if (validate) Object.assign(upd, { status: "valide", validated_by: member.user.id, validated_at: new Date().toISOString() });
+      if (validate) Object.assign(upd, { status: "valide", validated_source: "humain", validated_by: member.user.id, validated_at: new Date().toISOString() });
       let { error } = await sb.from("products").update(upd).eq("id", productId);
       if (error) { say(error.message, true); return; }
 

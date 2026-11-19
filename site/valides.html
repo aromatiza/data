@@ -31,16 +31,21 @@
         </select>
       </div>
       <h2 style="font-size:18px;color:var(--forest)">Plats <span class="tag" id="nd">…</span></h2>
+      <div id="dish-cats" class="catbar"></div>
       <div id="dishes">Chargement…</div>
       <h2 style="font-size:18px;color:var(--forest);margin-top:30px">Produits <span class="tag" id="np">…</span></h2>
+      <div id="product-cats" class="catbar"></div>
       <div id="products">Chargement…</div>
     </main>
   </div>
 
   <script type="module">
-    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, ratingBadge } from "./app.js";
+    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, ratingBadge,
+      loadCategories, categoryName, renderCategoryBar, matchCategory, auditBadges } from "./app.js";
 
     let dishes = [], products = [];
+    let dishCats = [], productCats = [];
+    const dishState = { cat: "" }, productState = { cat: "" };
     const norm = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
     const fmtDate = (d) => d ? new Date(d).toLocaleDateString("fr-FR") : "–";
 
@@ -56,8 +61,12 @@
 
     function render() {
       const q = norm(document.getElementById("q").value.trim());
-      const ds = sorted(dishes.filter((d) => !q || norm(d.name_fr + " " + (d.name_darija || "") + " " + (d.name_ar || "")).includes(q)), "name_fr");
-      const ps = sorted(products.filter((p) => !q || norm(p.name + " " + (p.brand || "") + " " + p.barcode).includes(q)), "name");
+      const dq = dishes.filter((d) => !q || norm(d.name_fr + " " + (d.variant_label || "") + " " + (d.name_darija || "") + " " + (d.name_ar || "")).includes(q));
+      const pq = products.filter((p) => !q || norm(p.name + " " + (p.brand || "") + " " + p.barcode).includes(q));
+      renderCategoryBar(document.getElementById("dish-cats"), dishCats, dq, (d) => d.category, dishState, render);
+      renderCategoryBar(document.getElementById("product-cats"), productCats, pq, (p) => p.category, productState, render);
+      const ds = sorted(dq.filter((d) => matchCategory(dishState, d.category)), "name_fr");
+      const ps = sorted(pq.filter((p) => matchCategory(productState, p.category)), "name");
       document.getElementById("nd").textContent = ds.length;
       document.getElementById("np").textContent = ps.length;
 
@@ -65,8 +74,8 @@
         <thead><tr><th></th><th>Plat</th><th>Note</th><th>Valeurs / 100 g</th><th>Validé le</th><th></th></tr></thead><tbody>
         ${ds.map((d) => `<tr>
           <td>${/^https:\/\//.test(d.image_url || "") ? `<img class="thumb" src="${esc(d.image_url)}" alt="" loading="lazy">` : `<span class="tag warn">pas d'image</span>`}</td>
-          <td><b>${esc(d.name_fr)}</b>${d.name_darija ? ` · ${esc(d.name_darija)}` : ""}<br><span class="muted">${esc(d.category || "")}${d.region ? " · " + esc(d.region) : ""}</span></td>
-          <td><div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group)}</div></td>
+          <td><b>${esc(d.name_fr)}</b>${d.name_darija ? ` · ${esc(d.name_darija)}` : ""}<br><span class="muted">${esc(categoryName(dishCats, d.category))}${d.region ? " · " + esc(d.region) : ""}</span></td>
+          <td><div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group)}</div><div class="scores">${auditBadges(d.audit_score, d.validated_source)}</div></td>
           <td>${d.energy_kcal_100g ?? "–"} kcal<br><span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"}</span></td>
           <td>${fmtDate(d.validated_at)}</td>
           <td><a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a></td>
@@ -76,9 +85,9 @@
         <thead><tr><th></th><th>Produit</th><th>Note</th><th>Valeurs / 100 g</th><th>Validé le</th><th></th></tr></thead><tbody>
         ${ps.map((p) => `<tr>
           <td>${/^https:\/\//.test(p.image_url || "") ? `<img class="thumb c" src="${esc(p.image_url)}" alt="" loading="lazy">` : `<span class="tag warn">pas d'image</span>`}</td>
-          <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span></td>
+          <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span><br><span class="muted">${esc(categoryName(productCats, p.category))}</span></td>
           <td><div class="scores">${ratingBadge(p.rating)} ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
-            ${p.scores_source === "calcul" ? `<span class="tag warn">estimé</span>` : ""}${p.nova_source === "estimation_ia" ? ` <span class="tag warn">NOVA IA</span>` : ""}</div></td>
+            ${p.scores_source === "calcul" ? `<span class="tag warn">estimé</span>` : ""}${p.nova_source === "estimation_ia" ? ` <span class="tag warn">NOVA IA</span>` : ""}</div><div class="scores">${auditBadges(p.audit_score, p.validated_source)}</div></td>
           <td>${p.energy_kcal ?? "–"} kcal<br><span class="muted">sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g</span></td>
           <td>${fmtDate(p.validated_at)}</td>
           <td><a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a></td>
@@ -86,11 +95,13 @@
     }
 
     async function load() {
-      const [n, d, p] = await Promise.all([
+      const [n, d, p, dc, pc] = await Promise.all([
         sb.from("dish_nutrition").select("*").eq("status", "valide"),
-        sb.from("dishes").select("id, name_darija, name_ar, category, region, image_url, validated_at").eq("status", "valide"),
-        sb.from("products").select("id, barcode, name, brand, image_url, energy_kcal, sugars_g, salt_g, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, rating, validated_at").eq("status", "valide"),
+        sb.from("dishes").select("id, name_darija, name_ar, category, region, image_url, validated_at, variant_label, audit_score, validated_source").eq("status", "valide"),
+        sb.from("products").select("id, barcode, name, brand, image_url, energy_kcal, sugars_g, salt_g, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, rating, validated_at, category, audit_score, validated_source").eq("status", "valide"),
+        loadCategories("dish"), loadCategories("product"),
       ]);
+      dishCats = dc; productCats = pc;
       const err = n.error || d.error || p.error;
       if (err) { document.getElementById("dishes").innerHTML = `<p class="notice">${esc(err.message)}</p>`; return; }
       const info = Object.fromEntries(d.data.map((x) => [x.id, x]));
