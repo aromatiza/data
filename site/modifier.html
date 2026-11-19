@@ -177,6 +177,8 @@
         <div class="card"><div class="n">${nutriBadge(ns.grade, ns.score ?? "")}</div><div class="l">Nutri-Score (${ns.score ?? "–"})</div></div>
         <div class="card"><div class="n">${novaBadge(nova)}</div><div class="l">${manual ? "NOVA choisi à la main" : "NOVA estimé (ingrédients)"}</div></div>
         <div class="card"><div class="n">${ratingBadge(unlinked ? null : nutrixRating(ns.score, nova))}</div><div class="l">Note NutriX</div></div>`;
+      const hs = document.getElementById("head-scores");
+      if (hs) hs.innerHTML = `${ratingBadge(unlinked ? null : nutrixRating(ns.score, nova))} ${nutriBadge(ns.grade, ns.score ?? "")} ${novaBadge(nova)} <span class="muted">note recalculée en direct</span>`;
       document.getElementById("preview-info").innerHTML =
         `Poids cru ${fmt(raw, 0)} g · poids final ${fmt(final, 0)} g${cooked ? " (après cuisson)" : " (cru, pas de poids après cuisson)"}`
         + (atw !== null ? ` · <span class="tag ${atw > 15 ? "warn" : "ok"}">Atwater ${fmt(atw)} %</span>` : "")
@@ -202,6 +204,7 @@
       main.innerHTML = `
         <div class="head">${img}<div>
           <h1 style="margin:0">Modifier : ${esc(d.name_fr)}</h1>
+          <div class="scores" id="head-scores" style="margin:6px 0"></div>
           <span class="tag">${esc(d.status)}</span> <span class="muted">${srcs || "aucune source"}</span>
         </div></div>
 
@@ -403,6 +406,7 @@
       main.innerHTML = `
         <div class="head">${img}<div>
           <h1 style="margin:0">Modifier : ${esc(p.name)}</h1>
+          <div class="scores" id="head-scores" style="margin:6px 0"></div>
           <span class="tag">${esc(p.status)}</span> <span class="muted">${esc(p.barcode)}</span>
           ${/^https?:\/\//.test(p.source_url || "") ? ` · <a class="muted" href="${esc(p.source_url)}" target="_blank" rel="noopener">source</a>` : ""}
         </div></div>
@@ -444,6 +448,18 @@
           <span id="msg"></span>
         </div>`;
       document.getElementById("photo_send").onclick = () => uploadPhoto("produits", productId);
+      // Note /100 en direct : Nutri-Score officiel s'il est choisi, sinon calcul NutriX (algorithme général)
+      const live = () => {
+        const g = val("ns_grade"), nova = num(val("nova_group"));
+        let score, grade;
+        if (g) { grade = g; score = num(val("ns_score")); }
+        else ({ score, grade } = nutriscore2023(num(val("energy_kcal")), num(val("sugars_g")), num(val("sat_fat_g")), num(val("salt_g")), num(val("fiber_g")), num(val("protein_g")), 0));
+        document.getElementById("head-scores").innerHTML =
+          `${ratingBadge(nutrixRating(score, nova))} ${nutriBadge(grade, score ?? "")} ${novaBadge(nova)} <span class="muted">${g ? "Nutri-Score officiel" : "Nutri-Score calculé"} · note recalculée en direct</span>`;
+      };
+      main.querySelectorAll("#ns_grade, #ns_score, #nova_group, #energy_kcal, #sugars_g, #sat_fat_g, #salt_g, #fiber_g, #protein_g")
+        .forEach((el) => el.addEventListener("input", live));
+      live();
       window.__novaInit = p.nova_group ?? null;
       document.getElementById("save").onclick = () => saveProduct(false);
       document.getElementById("save-validate").onclick = () => saveProduct(true);
