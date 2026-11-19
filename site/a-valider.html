@@ -12,96 +12,153 @@
     <div id="side"></div>
     <main>
       <h1>Plats à valider</h1>
-      <p class="muted">Vérifie la source et le calcul avant de valider. Les valeurs viennent de la table <b>ingredients</b> (méthode des recettes), jamais de l'IA.</p>
+      <p class="muted">Vérifie la source et le calcul avant de valider. Les valeurs viennent de la table <b>ingredients</b> (méthode des recettes), jamais de l'IA.
+        Une carte = un plat et ses variantes : choisis la variante, puis Valider / Rejeter / Modifier.</p>
+      <div id="dish-cats" class="catbar"></div>
       <div id="dishes">Chargement…</div>
 
       <h1 style="margin-top:34px">Produits à valider</h1>
       <p class="muted">Vérifie l'étiquette (photo ou texte), les valeurs et les additifs.</p>
+      <div id="product-cats" class="catbar"></div>
       <div id="products">Chargement…</div>
     </main>
   </div>
 
   <script type="module">
-    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, ratingBadge } from "./app.js";
+    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, ratingBadge,
+      loadCategories, categoryName, renderCategoryBar, matchCategory, auditBadges } from "./app.js";
 
     let member = null;
+    let dishCats = [], productCats = [];
+    let dishes = [];          // variantes à valider (dish_nutrition + infos de dishes)
+    let groupsById = {};      // dish_groups
+    let products = [];
+    const dishState = { cat: "" }, productState = { cat: "" };
+    const selected = {};      // clé de groupe -> id de la variante choisie
 
     function gap(pct, label) {
       if (pct === null || pct === undefined) return "";
       const bad = Number(pct) > 15;
       return `<span class="tag ${bad ? "warn" : "ok"}">${label} ${Number(pct).toFixed(1)} %</span>`;
     }
+    const groupKey = (d) => d.group_id ? "g" + d.group_id : "d" + d.dish_id;
 
     // ---------- Plats ----------
     async function loadDishes() {
+      const box = document.getElementById("dishes");
       const { data, error } = await sb.from("dish_nutrition")
         .select("*").eq("status", "a_valider").order("name_fr");
-      const box = document.getElementById("dishes");
       if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
-      if (!data.length) { box.innerHTML = `<p class="muted">Rien à valider.</p>`; return; }
 
-      // Infos en plus : image, noms, région, confiance, sources de la recette
       const ids = data.map((d) => d.dish_id);
-      const { data: extra } = await sb.from("dishes")
-        .select("id, name_ar, name_darija, region, confidence, image_url, image_credit, image_source, recipes(sources, version)")
-        .in("id", ids);
+      const { data: extra, error: e2 } = ids.length ? await sb.from("dishes")
+        .select("id, name_ar, name_darija, category, region, confidence, image_url, image_credit, group_id, variant_label, audit_score, validated_source, recipes(sources, version)")
+        .in("id", ids) : { data: [] };
+      if (e2) { box.innerHTML = `<p class="notice">${esc(e2.message)}</p>`; return; }
       const byId = Object.fromEntries((extra || []).map((x) => [x.id, x]));
+      dishes = data.map((d) => ({ ...d, ...(byId[d.dish_id] || {}) }));
 
-      const rows = data.map((d) => {
-        const x = byId[d.dish_id] || {};
-        const rec = (x.recipes || []).sort((a, b) => b.version - a.version)[0];
-        const srcs = (rec?.sources || []).filter((s) => /^https?:\/\//.test(s.url || ""))
-          .map((s, i) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">[${i + 1}] ${esc(s.title || "source")}</a>`).join("<br>");
-        const img = /^https:\/\//.test(x.image_url || "")
-          ? `<img src="${esc(x.image_url)}" alt="${esc(d.name_fr)}" loading="lazy" style="width:90px;height:90px;object-fit:cover;border-radius:10px;display:block;margin-bottom:4px">
-             <span class="muted" style="font-size:11px">${esc(x.image_credit || "")}</span>`
-          : `<span class="tag warn">pas d'image</span>`;
-        const conf = x.confidence ? `<span class="tag ${x.confidence === "haute" ? "ok" : "warn"}">confiance ${esc(x.confidence)}</span>` : "";
-        return `
-        <tr data-id="${d.dish_id}">
-          <td>${img}</td>
-          <td><b>${esc(d.name_fr)}</b> ${x.name_darija ? `· ${esc(x.name_darija)}` : ""} ${x.name_ar ? `· ${esc(x.name_ar)}` : ""}<br>
-              <span class="muted">${d.n_ingredients} ingrédients${x.region ? " · " + esc(x.region) : ""}</span> ${conf}
-              ${srcs ? `<div class="muted" style="font-size:12px;margin-top:4px">${srcs}</div>` : `<br><span class="tag warn">aucune source</span>`}</td>
-          <td>${d.energy_kcal_100g ?? "–"} kcal<br>
-              <span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"} (g/100 g)</span>
-              <div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group, d.nova_is_manual ? "(choisi à la main)" : "(estimé)")}</div></td>
-          <td>${d.portion_g ? esc(d.portion_g) + " g" : "–"}</td>
-          <td>${gap(d.atwater_gap_pct, "Atwater")} ${gap(d.tmca_gap_pct, "TMCA")}
-              ${d.n_unlinked > 0 ? `<span class="tag warn">${d.n_unlinked} ingrédient(s) non relié(s)</span>` : ""}</td>
-          <td class="actions">
-            <a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a>
-            <button class="primary" data-kind="dish" data-act="valide">Valider</button>
-            <button data-kind="dish" data-act="rejete">Rejeter</button>
-          </td>
-        </tr>`;
-      }).join("");
+      const gids = [...new Set(dishes.map((d) => d.group_id).filter(Boolean))];
+      groupsById = {};
+      if (gids.length) {
+        const { data: groups } = await sb.from("dish_groups")
+          .select("id, name_fr, name_ar, name_darija, category").in("id", gids);
+        (groups || []).forEach((g) => { groupsById[g.id] = g; });
+      }
+      renderDishes();
+    }
 
-      box.innerHTML = `<table>
-        <thead><tr><th>Image</th><th>Plat</th><th>Valeurs / 100 g</th><th>Portion</th><th>Contrôles</th><th>Action</th></tr></thead>
-        <tbody>${rows}</tbody></table>`;
+    function renderDishes() {
+      renderCategoryBar(document.getElementById("dish-cats"), dishCats, dishes, (d) => d.category, dishState, renderDishes);
+      const box = document.getElementById("dishes");
+      const list = dishes.filter((d) => matchCategory(dishState, d.category));
+      if (!list.length) { box.innerHTML = `<p class="muted">Rien à valider${dishState.cat ? " dans cette catégorie" : ""}.</p>`; return; }
+
+      // Regroupe les variantes : une carte par dish_groups (ou par plat seul)
+      const order = [], groups = {};
+      list.forEach((d) => {
+        const k = groupKey(d);
+        if (!groups[k]) { groups[k] = []; order.push(k); }
+        groups[k].push(d);
+      });
+      box.innerHTML = `<div class="vcards">${order.map((k) => cardHtml(k, groups[k])).join("")}</div>`;
+    }
+
+    function cardHtml(key, variants) {
+      if (!variants.some((v) => v.dish_id === selected[key])) selected[key] = variants[0].dish_id;
+      const first = variants[0];
+      const g = first.group_id ? groupsById[first.group_id] : null;
+      const title = g?.name_fr || first.name_fr;
+      const darija = g ? g.name_darija : first.name_darija;
+      const ar = g ? g.name_ar : first.name_ar;
+      const cat = categoryName(dishCats, g?.category || first.category);
+      const tabs = first.group_id ? `<div class="vtabs">${variants.map((v) =>
+        `<button type="button" class="vtab ${v.dish_id === selected[key] ? "on" : ""}" data-pick="${v.dish_id}">${esc(v.variant_label || v.name_fr)}</button>`
+      ).join("")}</div>` : "";
+      return `<article class="vcard" data-group="${esc(key)}">
+        <div class="vhead"><b>${esc(title)}</b>${darija ? ` <span>· ${esc(darija)}</span>` : ""}${ar ? ` <span>· ${esc(ar)}</span>` : ""}
+          <span class="tag">${esc(cat)}</span>${first.group_id ? ` <span class="muted">${variants.length} variante(s) à valider</span>` : ""}</div>
+        ${tabs}
+        <div class="vbody">${variantBody(variants.find((v) => v.dish_id === selected[key]))}</div>
+      </article>`;
+    }
+
+    function variantBody(d) {
+      const rec = (d.recipes || []).slice().sort((a, b) => b.version - a.version)[0];
+      const srcs = (rec?.sources || []).filter((s) => /^https?:\/\//.test(s.url || ""))
+        .map((s, i) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">[${i + 1}] ${esc(s.title || "source")}</a>`).join("<br>");
+      const img = /^https:\/\//.test(d.image_url || "")
+        ? `<img src="${esc(d.image_url)}" alt="${esc(d.name_fr)}" loading="lazy"><span class="muted" style="font-size:11px">${esc(d.image_credit || "")}</span>`
+        : `<span class="tag warn">pas d'image</span>`;
+      const conf = d.confidence ? `<span class="tag ${d.confidence === "haute" ? "ok" : "warn"}">confiance ${esc(d.confidence)}</span>` : "";
+      return `
+        <div>${img}</div>
+        <div><b>${esc(d.name_fr)}</b><br>
+          <span class="muted">${d.n_ingredients} ingrédients${d.region ? " · " + esc(d.region) : ""}${d.portion_g ? " · portion " + esc(d.portion_g) + " g" : ""}</span> ${conf}
+          ${srcs ? `<div class="muted" style="font-size:12px;margin-top:4px">${srcs}</div>` : `<br><span class="tag warn">aucune source</span>`}
+          <div class="scores">${auditBadges(d.audit_score, d.validated_source)}</div></div>
+        <div>${d.energy_kcal_100g ?? "–"} kcal / 100 g<br>
+          <span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"} (g/100 g)</span>
+          <div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group, d.nova_is_manual ? "(choisi à la main)" : "(estimé)")}</div>
+          <div class="scores">${gap(d.atwater_gap_pct, "Atwater")} ${gap(d.tmca_gap_pct, "TMCA")}
+          ${d.n_unlinked > 0 ? `<span class="tag warn">${d.n_unlinked} ingrédient(s) non relié(s)</span>` : ""}</div></div>
+        <div class="actions" data-id="${d.dish_id}">
+          <a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a>
+          <button class="primary" data-kind="dish" data-act="valide">Valider</button>
+          <button data-kind="dish" data-act="rejete">Rejeter</button>
+        </div>`;
     }
 
     async function decideDish(id, action, reason) {
       const status = action === "valide" ? "valide" : "rejete";
       const { error } = await sb.from("dishes")
-        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString() })
+        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString(),
+          ...(status === "valide" ? { validated_source: "humain" } : {}) })
         .eq("id", id);
-      if (error) { alert(error.message); return; }
+      if (error) { alert(error.message); return false; }
       await sb.from("recipes").update({ status }).eq("dish_id", id);
       await sb.from("review_log").insert({ table_name: "dishes", row_id: id, action: status, reason });
+      return true;
     }
 
     // ---------- Produits ----------
     async function loadProducts() {
       const { data, error } = await sb.from("products")
-        .select("id, name, brand, barcode, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, values_source, rating, product_additives(additives(e_code, name_fr))")
+        .select("id, name, brand, barcode, category, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, values_source, rating, audit_score, validated_source, product_additives(additives(e_code, name_fr))")
         .eq("status", "a_valider").order("created_at", { ascending: false });
       const box = document.getElementById("products");
       if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
-      if (!data.length) { box.innerHTML = `<p class="muted">Rien à valider.</p>`; return; }
+      products = data;
+      renderProducts();
+    }
 
-      const rows = data.map((p) => {
+    function renderProducts() {
+      renderCategoryBar(document.getElementById("product-cats"), productCats, products, (p) => p.category, productState, renderProducts);
+      const box = document.getElementById("products");
+      const list = products.filter((p) => matchCategory(productState, p.category));
+      if (!list.length) { box.innerHTML = `<p class="muted">Rien à valider${productState.cat ? " dans cette catégorie" : ""}.</p>`; return; }
+
+      const rows = list.map((p) => {
         const add = (p.product_additives || []).map((x) => x.additives)
           .filter(Boolean).map((a) => esc(a.e_code || a.name_fr)).join(", ") || "aucun";
         const srcLabel = p.source === "OpenFoodFacts" ? "Open Food Facts (ODbL)" : "Étiquette";
@@ -114,14 +171,16 @@
         return `
           <tr data-id="${p.id}">
             <td>${img}</td>
-            <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span></td>
+            <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span><br>
+              <span class="tag">${esc(categoryName(productCats, p.category))}</span>
+              <div class="scores">${auditBadges(p.audit_score, p.validated_source)}</div></td>
             <td>${p.energy_kcal ?? "–"} kcal · sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g<br>${src}
               <div class="scores">${ratingBadge(p.rating)} ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
               ${p.scores_source === "calcul" ? `<span class="tag warn" title="Calcul NutriX (algorithme général) : à vérifier sur Open Food Facts">estimé</span>` : ""}
               ${p.nova_source === "estimation_ia" ? `<span class="tag warn" title="NOVA estimé par l'IA depuis la liste d'ingrédients">NOVA IA</span>` : ""}
               ${p.values_source === "photo_etiquette_ia" ? `<span class="tag warn" title="Valeurs lues par l'IA sur la photo de l'étiquette">valeurs IA</span>` : ""}</div></td>
             <td>${add}</td>
-            <td class="actions">
+            <td class="actions" data-id="${p.id}">
               <a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a>
               <button class="primary" data-kind="product" data-act="valide">Valider</button>
               <button data-kind="product" data-act="rejete">Rejeter</button>
@@ -137,26 +196,40 @@
     async function decideProduct(id, action, reason) {
       const status = action === "valide" ? "valide" : "rejete";
       const { error } = await sb.from("products")
-        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString() })
+        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString(),
+          ...(status === "valide" ? { validated_source: "humain" } : {}) })
         .eq("id", id);
-      if (error) { alert(error.message); return; }
+      if (error) { alert(error.message); return false; }
       await sb.from("review_log").insert({ table_name: "products", row_id: id, action: status, reason });
+      return true;
     }
 
     // ---------- Clics ----------
     document.querySelector("main").addEventListener("click", async (e) => {
+      // Choix de la variante dans une carte
+      const tab = e.target.closest("button[data-pick]");
+      if (tab) {
+        const card = tab.closest(".vcard");
+        selected[card.dataset.group] = Number(tab.dataset.pick);
+        renderDishes();
+        return;
+      }
       const btn = e.target.closest("button[data-act]");
       if (!btn) return;
-      const id = Number(btn.closest("tr").dataset.id);
+      const id = Number(btn.closest("[data-id]").dataset.id);
       const act = btn.dataset.act;
       let reason = null;
       if (act === "rejete") {
         reason = (prompt("Raison du rejet (obligatoire) :") || "").trim();
         if (!reason) return;
       }
-      if (btn.dataset.kind === "dish") await decideDish(id, act, reason);
-      else await decideProduct(id, act, reason);
-      btn.closest("tr").remove();
+      btn.disabled = true;
+      if (btn.dataset.kind === "dish") {
+        if (await decideDish(id, act, reason)) { dishes = dishes.filter((d) => d.dish_id !== id); renderDishes(); }
+      } else {
+        if (await decideProduct(id, act, reason)) { products = products.filter((p) => p.id !== id); renderProducts(); }
+      }
+      btn.disabled = false;
     });
 
     (async () => {
@@ -169,6 +242,7 @@
       document.getElementById("side").outerHTML = nav("a-valider.html");
       wireLogout();
       document.getElementById("app").hidden = false;
+      [dishCats, productCats] = await Promise.all([loadCategories("dish"), loadCategories("product")]);
       loadDishes();
       loadProducts();
     })();
