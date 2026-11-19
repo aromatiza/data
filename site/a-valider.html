@@ -95,7 +95,7 @@
     // ---------- Produits ----------
     async function loadProducts() {
       const { data, error } = await sb.from("products")
-        .select("id, name, brand, barcode, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, nutriscore_grade, nutriscore_score, nova_group, scores_source, product_additives(additives(e_code, name_fr))")
+        .select("id, name, brand, barcode, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, values_source, product_additives(additives(e_code, name_fr))")
         .eq("status", "a_valider").order("created_at", { ascending: false });
       const box = document.getElementById("products");
       if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
@@ -117,7 +117,9 @@
             <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span></td>
             <td>${p.energy_kcal ?? "–"} kcal · sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g<br>${src}
               <div class="scores">${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
-              ${p.scores_source === "calcul" ? `<span class="tag warn" title="Calcul NutriX (algorithme général) : à vérifier sur Open Food Facts">estimé</span>` : ""}</div></td>
+              ${p.scores_source === "calcul" ? `<span class="tag warn" title="Calcul NutriX (algorithme général) : à vérifier sur Open Food Facts">estimé</span>` : ""}
+              ${p.nova_source === "estimation_ia" ? `<span class="tag warn" title="NOVA estimé par l'IA depuis la liste d'ingrédients">NOVA IA</span>` : ""}
+              ${p.values_source === "photo_etiquette_ia" ? `<span class="tag warn" title="Valeurs lues par l'IA sur la photo de l'étiquette">valeurs IA</span>` : ""}</div></td>
             <td>${add}</td>
             <td class="actions">
               <a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a>

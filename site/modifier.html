@@ -67,6 +67,47 @@
       return { score, grade };
     }
 
+    // Photo : redimensionnée dans le navigateur (max 1200 px, JPEG), envoyée dans Supabase Storage (bucket « photos »)
+    async function uploadPhoto(kind, id) {
+      const input = document.getElementById("photo_file");
+      const file = input?.files?.[0];
+      if (!file) { say("Choisis d'abord une photo.", true); return; }
+      if (!/^image\/(jpeg|png|webp)$/.test(file.type)) { say("Format accepté : JPG, PNG ou WEBP.", true); return; }
+      say("Envoi de la photo…");
+      const url = URL.createObjectURL(file);
+      let blob;
+      try {
+        const img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ko; i.src = url; });
+        const M = 1200, k = Math.min(1, M / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        blob = await new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.85));
+      } catch { say("Image illisible.", true); return; } finally { URL.revokeObjectURL(url); }
+      const path = `${kind}/${id}-${Date.now()}.jpg`;
+      const { error } = await sb.storage.from("photos").upload(path, blob, { contentType: "image/jpeg", upsert: false });
+      if (error) { say(error.message, true); return; }
+      const publicUrl = sb.storage.from("photos").getPublicUrl(path).data.publicUrl;
+      const table = kind === "plats" ? "dishes" : "products";
+      const upd = kind === "plats"
+        ? { image_url: publicUrl, image_credit: "Photo équipe NutriX", image_source: null }
+        : { image_url: publicUrl, image_credit: "Photo équipe NutriX" };
+      const r = await sb.from(table).update(upd).eq("id", id);
+      if (r.error) { say(r.error.message, true); return; }
+      document.getElementById("image_url").value = publicUrl;
+      const head = document.querySelector(".head img");
+      if (head) head.src = publicUrl;
+      else document.querySelector(".head").insertAdjacentHTML("afterbegin", `<img src="${esc(publicUrl)}" alt="">`);
+      input.value = "";
+      say("Photo enregistrée ✓");
+    }
+    const photoField = () => `
+          <label class="wide">Photo (depuis ton téléphone ou ton PC)
+            <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input id="photo_file" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" style="flex:1;min-width:200px">
+              <button type="button" id="photo_send" class="accent">Envoyer la photo</button>
+            </span></label>`;
+
     // =====================================================================
     // PLAT
     // =====================================================================
@@ -176,6 +217,7 @@
               ${["", "haute", "moyenne", "faible"].map((c) => `<option value="${c}" ${c === (d.confidence || "") ? "selected" : ""}>${c || "—"}</option>`).join("")}
             </select></label>
           <label>Image (URL https)<input id="image_url" value="${esc(d.image_url || "")}"></label>
+          ${photoField()}
           <label>NOVA (laisser vide = estimé depuis les ingrédients)
             <select id="nova_manual">
               ${["", 1, 2, 3, 4].map((n) => `<option value="${n}" ${String(n) === String(d.nova_manual ?? "") ? "selected" : ""}>${n ? "NOVA " + n : "— estimé —"}</option>`).join("")}
@@ -261,6 +303,7 @@
       };
       document.getElementById("cooked_weight_g").oninput = computePreview;
       document.getElementById("nova_manual").onchange = computePreview;
+      document.getElementById("photo_send").onclick = () => uploadPhoto("plats", dishId);
       document.getElementById("ni_save").onclick = addIngredient;
       document.getElementById("save").onclick = () => saveDish(false);
       document.getElementById("save-validate").onclick = () => saveDish(true);
@@ -303,6 +346,7 @@
         category: val("category") || null, region: val("region") || null, portion_g: num(val("portion_g")),
         confidence: val("confidence") || null, image_url: img || null, method_notes: val("method_notes") || null,
         nova_manual: num(val("nova_manual")),
+        nova_source: num(val("nova_manual")) ? "manuel" : null,
       };
       if (validate) Object.assign(dishUpd, { status: "valide", validated_by: member.user.id, validated_at: new Date().toISOString() });
       let { error } = await sb.from("dishes").update(dishUpd).eq("id", dishId);
@@ -366,6 +410,7 @@
           <label>Marque<input id="brand" value="${esc(p.brand || "")}"></label>
           <label>Quantité<input id="quantity" value="${esc(p.quantity || "")}"></label>
           <label>Image (URL https)<input id="image_url" value="${esc(p.image_url || "")}"></label>
+          ${photoField()}
           <label class="wide">Ingrédients (étiquette)<textarea id="ingredients_text" rows="3">${esc(p.ingredients_text || "")}</textarea></label>
           ${f("energy_kcal", "Énergie (kcal / 100 g)", "0.1")}
           ${f("protein_g", "Protéines (g / 100 g)")}
@@ -387,6 +432,8 @@
               ${["", 1, 2, 3, 4].map((n) => `<option value="${n}" ${String(n) === String(p.nova_group ?? "") ? "selected" : ""}>${n ? "NOVA " + n : "—"}</option>`).join("")}
             </select></label>
           <div class="wide scores">Actuel : ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
+            ${p.nova_source === "estimation_ia" ? `<span class="tag warn" title="NOVA estimé par l'IA depuis la liste d'ingrédients">NOVA IA</span>` : ""}
+            ${p.values_source === "photo_etiquette_ia" ? `<span class="tag warn" title="Valeurs lues par l'IA sur la photo de l'étiquette">valeurs IA</span>` : ""}
             <span class="muted">${p.scores_source === "OpenFoodFacts" ? "Nutri-Score officiel (Open Food Facts)" : p.scores_source === "calcul" ? "Nutri-Score estimé par NutriX (algorithme général, faux pour boissons, huiles et fromages : mets la note officielle)" : ""}</span></div>
         </div>
         <div class="bar actions">
@@ -395,6 +442,8 @@
           <a href="a-valider.html"><button type="button">Retour</button></a>
           <span id="msg"></span>
         </div>`;
+      document.getElementById("photo_send").onclick = () => uploadPhoto("produits", productId);
+      window.__novaInit = p.nova_group ?? null;
       document.getElementById("save").onclick = () => saveProduct(false);
       document.getElementById("save-validate").onclick = () => saveProduct(true);
     }
@@ -412,6 +461,7 @@
       if (g) Object.assign(upd, { nutriscore_grade: g, nutriscore_score: num(val("ns_score")), scores_source: "OpenFoodFacts" });
       else Object.assign(upd, { nutriscore_grade: null, nutriscore_score: null, scores_source: null }); // la base recalcule
       upd.nova_group = num(val("nova_group"));
+      if (upd.nova_group !== window.__novaInit) upd.nova_source = upd.nova_group ? "manuel" : null;
       if (upd.sugars_g !== null && upd.carbs_g !== null && upd.sugars_g > upd.carbs_g) { say("Sucres > glucides : vérifie.", true); return; }
       if (validate) Object.assign(upd, { status: "valide", validated_by: member.user.id, validated_at: new Date().toISOString() });
       let { error } = await sb.from("products").update(upd).eq("id", productId);
