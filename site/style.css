@@ -40,3 +40,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .muted { color: var(--muted); font-size: 13px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 @media (max-width: 720px) { .layout { grid-template-columns: 1fr; } }
+
+/* Nutri-Score (couleurs officielles) et NOVA */
+.ns { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 6px; border-radius: 6px; font-weight: 800; color: #fff; font-size: 14px; text-transform: uppercase; }
+.ns-a { background: #038141; } .ns-b { background: #85bb2f; } .ns-c { background: #fecb02; color: #1b2a22; }
+.ns-d { background: #ee8100; } .ns-e { background: #e63e11; } .ns-x { background: #c9c3b4; color: #1b2a22; }
+.nova { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; font-weight: 700; font-size: 12px; color: #fff; }
+.nova-1 { background: #00aa00; } .nova-2 { background: #ffcc00; color: #1b2a22; } .nova-3 { background: #ff6600; } .nova-4 { background: #ff0000; } .nova-x { background: #c9c3b4; color: #1b2a22; }
+.scores { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }

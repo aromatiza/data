@@ -22,7 +22,7 @@
   </div>
 
   <script type="module">
-    import { sb, esc, requireTeamMember, nav, wireLogout } from "./app.js";
+    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge } from "./app.js";
 
     let member = null;
 
@@ -64,7 +64,8 @@
               <span class="muted">${d.n_ingredients} ingrédients${x.region ? " · " + esc(x.region) : ""}</span> ${conf}
               ${srcs ? `<div class="muted" style="font-size:12px;margin-top:4px">${srcs}</div>` : `<br><span class="tag warn">aucune source</span>`}</td>
           <td>${d.energy_kcal_100g ?? "–"} kcal<br>
-              <span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"} (g/100 g)</span></td>
+              <span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"} (g/100 g)</span>
+              <div class="scores">${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group, d.nova_is_manual ? "(choisi à la main)" : "(estimé)")}</div></td>
           <td>${d.portion_g ? esc(d.portion_g) + " g" : "–"}</td>
           <td>${gap(d.atwater_gap_pct, "Atwater")} ${gap(d.tmca_gap_pct, "TMCA")}
               ${d.n_unlinked > 0 ? `<span class="tag warn">${d.n_unlinked} ingrédient(s) non relié(s)</span>` : ""}</td>
@@ -94,7 +95,7 @@
     // ---------- Produits ----------
     async function loadProducts() {
       const { data, error } = await sb.from("products")
-        .select("id, name, brand, barcode, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, product_additives(additives(e_code, name_fr))")
+        .select("id, name, brand, barcode, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, nutriscore_grade, nutriscore_score, nova_group, scores_source, product_additives(additives(e_code, name_fr))")
         .eq("status", "a_valider").order("created_at", { ascending: false });
       const box = document.getElementById("products");
       if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
@@ -114,7 +115,9 @@
           <tr data-id="${p.id}">
             <td>${img}</td>
             <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span></td>
-            <td>${p.energy_kcal ?? "–"} kcal · sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g<br>${src}</td>
+            <td>${p.energy_kcal ?? "–"} kcal · sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g<br>${src}
+              <div class="scores">${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
+              ${p.scores_source === "calcul" ? `<span class="tag warn" title="Calcul NutriX (algorithme général) : à vérifier sur Open Food Facts">estimé</span>` : ""}</div></td>
             <td>${add}</td>
             <td class="actions">
               <a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a>

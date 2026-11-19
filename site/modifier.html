@@ -31,7 +31,7 @@
   </div>
 
   <script type="module">
-    import { sb, esc, requireTeamMember, nav, wireLogout } from "./app.js";
+    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge } from "./app.js";
 
     const params = new URLSearchParams(location.search);
     const dishId = Number(params.get("plat")) || null;
@@ -50,6 +50,23 @@
       await sb.from("review_log").insert({ table_name: table, row_id: rowId, action, reason: reason || null });
     }
 
+    function nutriscore2023(kcal, sugars, satfat, salt, fiber, protein, fvl) {
+      if (kcal === null || isNaN(kcal)) return { score: null, grade: null };
+      const cnt = (v, arr) => arr.filter((t) => (v || 0) > t).length;
+      const kj = kcal * 4.184;
+      const e = cnt(kj, [335, 670, 1005, 1340, 1675, 2010, 2345, 2680, 3015, 3350]);
+      const s = cnt(sugars, [3.4, 6.8, 10, 14, 17, 20, 24, 27, 31, 34, 37, 41, 44, 48, 51]);
+      const sf = cnt(satfat, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      const sa = cnt(salt, Array.from({ length: 20 }, (_, i) => +(0.2 * (i + 1)).toFixed(1)));
+      const pr = cnt(protein, [2.4, 4.8, 7.2, 9.6, 12, 14, 17]);
+      const fi = cnt(fiber, [3.0, 4.1, 5.2, 6.3, 7.4]);
+      const fv = (fvl || 0) > 80 ? 5 : (fvl || 0) > 60 ? 2 : (fvl || 0) > 40 ? 1 : 0;
+      const n = e + s + sf + sa;
+      const score = n - (fi + fv + (n >= 11 ? 0 : pr));
+      const grade = score <= 0 ? "a" : score <= 2 ? "b" : score <= 10 ? "c" : score <= 18 ? "d" : "e";
+      return { score, grade };
+    }
+
     // =====================================================================
     // PLAT
     // =====================================================================
@@ -60,7 +77,7 @@
 
     async function loadIngredients() {
       const { data, error } = await sb.from("ingredients")
-        .select("id, name_fr, name_darija, source, source_code, energy_kcal, protein_g, carbs_g, fat_g, fiber_g, salt_g")
+        .select("id, name_fr, name_darija, source, source_code, energy_kcal, protein_g, carbs_g, sugars_g, fat_g, sat_fat_g, fiber_g, salt_g, water_g, fvl_pct, nova_group")
         .order("name_fr");
       if (error) throw error;
       ingredients = data;
@@ -68,7 +85,7 @@
 
     function ingredientOptions(selected) {
       return `<option value="">— non relié —</option>` + ingredients.map((i) =>
-        `<option value="${i.id}" ${i.id === selected ? "selected" : ""}>${esc(i.name_fr)} · ${esc(i.source)} ${esc(i.source_code || "")} · ${fmt(i.energy_kcal, 0)} kcal</option>`
+        `<option value="${i.id}" ${i.id === selected ? "selected" : ""}>${esc(i.name_fr)} · ${esc(i.source)} ${esc(i.source_code || "")} · ${fmt(i.energy_kcal, 0)} kcal · NOVA ${i.nova_group ?? "?"}${Number(i.fvl_pct) > 0 ? " · FLV" : ""}</option>`
       ).join("");
     }
 
@@ -87,7 +104,7 @@
     // Même formule que la vue dish_nutrition (méthode des recettes)
     function computePreview() {
       const byId = Object.fromEntries(ingredients.map((i) => [i.id, i]));
-      let raw = 0, kcal = 0, p = 0, g = 0, l = 0, f = 0, s = 0, unlinked = 0;
+      let raw = 0, kcal = 0, p = 0, g = 0, l = 0, f = 0, s = 0, su = 0, sf = 0, fvlW = 0, solidW = 0, unlinked = 0, novaMain = 0, novaAll = 0, novaMissing = 0;
       for (const ln of lines) {
         const w = num(ln.grams) || 0; raw += w;
         const i = byId[ln.ingredient_id];
@@ -95,21 +112,33 @@
         kcal += w * (i.energy_kcal || 0) / 100; p += w * (i.protein_g || 0) / 100;
         g += w * (i.carbs_g || 0) / 100; l += w * (i.fat_g || 0) / 100;
         f += w * (i.fiber_g || 0) / 100; s += w * (i.salt_g || 0) / 100;
+        su += w * (i.sugars_g || 0) / 100; sf += w * (i.sat_fat_g || 0) / 100;
+        fvlW += w * (Number(i.fvl_pct) || 0) / 100;
+        if ((Number(i.water_g) || 0) < 99.5) solidW += w;
+        if (i.nova_group == null) novaMissing++;
+        else { novaAll = Math.max(novaAll, i.nova_group); if (i.nova_group !== 2) novaMain = Math.max(novaMain, i.nova_group); }
       }
       const cooked = num(document.getElementById("cooked_weight_g")?.value);
       const final = cooked || raw;
       const per = (x) => final ? x / final * 100 : null;
       const atw = kcal ? Math.abs((4 * p + 4 * g + 9 * l + 2 * f) - kcal) / kcal * 100 : null;
+      const fvl = solidW ? fvlW / solidW * 100 : 0;
+      const ns = unlinked ? { score: null, grade: null } : nutriscore2023(per(kcal), per(su), per(sf), per(s), per(f), per(p), fvl);
+      const manual = num(document.getElementById("nova_manual")?.value);
+      const nova = manual || (unlinked || novaMissing ? null : (novaMain || novaAll || null));
       document.getElementById("preview").innerHTML = `
         <div class="card"><div class="n">${fmt(per(kcal))}</div><div class="l">kcal / 100 g</div></div>
         <div class="card"><div class="n">${fmt(per(p), 2)}</div><div class="l">Protéines g</div></div>
         <div class="card"><div class="n">${fmt(per(g), 2)}</div><div class="l">Glucides g</div></div>
         <div class="card"><div class="n">${fmt(per(l), 2)}</div><div class="l">Lipides g</div></div>
         <div class="card"><div class="n">${fmt(per(f), 2)}</div><div class="l">Fibres g</div></div>
-        <div class="card"><div class="n">${fmt(per(s), 2)}</div><div class="l">Sel g</div></div>`;
+        <div class="card"><div class="n">${fmt(per(s), 2)}</div><div class="l">Sel g</div></div>
+        <div class="card"><div class="n">${nutriBadge(ns.grade, ns.score ?? "")}</div><div class="l">Nutri-Score (${ns.score ?? "–"})</div></div>
+        <div class="card"><div class="n">${novaBadge(nova)}</div><div class="l">${manual ? "NOVA choisi à la main" : "NOVA estimé (ingrédients)"}</div></div>`;
       document.getElementById("preview-info").innerHTML =
         `Poids cru ${fmt(raw, 0)} g · poids final ${fmt(final, 0)} g${cooked ? " (après cuisson)" : " (cru, pas de poids après cuisson)"}`
         + (atw !== null ? ` · <span class="tag ${atw > 15 ? "warn" : "ok"}">Atwater ${fmt(atw)} %</span>` : "")
+        + ` · fruits/légumes/légumineuses ${fmt(fvl, 0)} %`
         + (unlinked ? ` · <span class="tag warn">${unlinked} ligne(s) non reliée(s)</span>` : "");
     }
 
@@ -147,6 +176,10 @@
               ${["", "haute", "moyenne", "faible"].map((c) => `<option value="${c}" ${c === (d.confidence || "") ? "selected" : ""}>${c || "—"}</option>`).join("")}
             </select></label>
           <label>Image (URL https)<input id="image_url" value="${esc(d.image_url || "")}"></label>
+          <label>NOVA (laisser vide = estimé depuis les ingrédients)
+            <select id="nova_manual">
+              ${["", 1, 2, 3, 4].map((n) => `<option value="${n}" ${String(n) === String(d.nova_manual ?? "") ? "selected" : ""}>${n ? "NOVA " + n : "— estimé —"}</option>`).join("")}
+            </select></label>
           <label class="wide">Notes de méthode<textarea id="method_notes" rows="3">${esc(d.method_notes || "")}</textarea></label>
         </div>
 
@@ -183,6 +216,9 @@
             <label>Fibres g<input id="ni_f" type="number" step="0.01" min="0" max="100"></label>
             <label>Sel g<input id="ni_salt" type="number" step="0.001" min="0" max="100"></label>
             <label>Eau g<input id="ni_w" type="number" step="0.01" min="0" max="100"></label>
+            <label>Fruits/légumes/légumineuses (%)<input id="ni_fvl" type="number" step="1" min="0" max="100" value="0"></label>
+            <label>Groupe NOVA
+              <select id="ni_nova"><option value="">—</option><option value="1">1 · brut / peu transformé</option><option value="2">2 · ingrédient culinaire (huile, sucre, sel, beurre)</option><option value="3">3 · transformé</option><option value="4">4 · ultra-transformé</option></select></label>
             <div class="wide"><button type="button" id="ni_save" class="primary">Ajouter à la base</button>
               <span class="muted">Valeurs pour 100 g, recopiées de la source.</span></div>
           </div>
@@ -224,6 +260,7 @@
         lines.push({ raw_label: "", grams: "", ingredient_id: null }); renderLines();
       };
       document.getElementById("cooked_weight_g").oninput = computePreview;
+      document.getElementById("nova_manual").onchange = computePreview;
       document.getElementById("ni_save").onclick = addIngredient;
       document.getElementById("save").onclick = () => saveDish(false);
       document.getElementById("save-validate").onclick = () => saveDish(true);
@@ -236,6 +273,7 @@
         energy_kcal: num(val("ni_kcal")), protein_g: num(val("ni_p")), carbs_g: num(val("ni_g")),
         sugars_g: num(val("ni_sug")), fat_g: num(val("ni_l")), sat_fat_g: num(val("ni_sat")),
         fiber_g: num(val("ni_f")), salt_g: num(val("ni_salt")), water_g: num(val("ni_w")),
+        fvl_pct: num(val("ni_fvl")) ?? 0, nova_group: num(val("ni_nova")),
       };
       if (!row.name_fr || [row.energy_kcal, row.protein_g, row.carbs_g, row.fat_g].some((x) => x === null)) {
         say("Nom, énergie, protéines, glucides et lipides sont obligatoires.", true); return;
@@ -245,7 +283,7 @@
       await loadIngredients();
       renderLines();
       document.getElementById("new-ingr").open = false;
-      ["ni_name", "ni_darija", "ni_code", "ni_url", "ni_kcal", "ni_p", "ni_g", "ni_sug", "ni_l", "ni_sat", "ni_f", "ni_salt", "ni_w"]
+      ["ni_name", "ni_darija", "ni_code", "ni_url", "ni_kcal", "ni_p", "ni_g", "ni_sug", "ni_l", "ni_sat", "ni_f", "ni_salt", "ni_w", "ni_nova"]
         .forEach((id) => { document.getElementById(id).value = ""; });
       say(`« ${row.name_fr} » ajouté : choisis-le dans une ligne.`);
     }
@@ -264,6 +302,7 @@
         name_fr: val("name_fr"), name_darija: val("name_darija") || null, name_ar: val("name_ar") || null,
         category: val("category") || null, region: val("region") || null, portion_g: num(val("portion_g")),
         confidence: val("confidence") || null, image_url: img || null, method_notes: val("method_notes") || null,
+        nova_manual: num(val("nova_manual")),
       };
       if (validate) Object.assign(dishUpd, { status: "valide", validated_by: member.user.id, validated_at: new Date().toISOString() });
       let { error } = await sb.from("dishes").update(dishUpd).eq("id", dishId);
@@ -337,6 +376,18 @@
           ${f("fiber_g", "Fibres (g / 100 g)")}
           ${f("salt_g", "Sel (g / 100 g)", "0.001")}
           <label class="wide">Additifs (codes E séparés par des virgules)<input id="additives" value="${esc(adds)}"></label>
+          <label>Nutri-Score
+            <select id="ns_grade">
+              <option value="">Calcul NutriX automatique</option>
+              ${["a", "b", "c", "d", "e"].map((g) => `<option value="${g}" ${p.scores_source === "OpenFoodFacts" && p.nutriscore_grade === g ? "selected" : ""}>${g.toUpperCase()} (officiel Open Food Facts)</option>`).join("")}
+            </select></label>
+          <label>Score Nutri-Score (officiel)<input id="ns_score" type="number" step="1" value="${p.scores_source === "OpenFoodFacts" ? (p.nutriscore_score ?? "") : ""}"></label>
+          <label>Groupe NOVA
+            <select id="nova_group">
+              ${["", 1, 2, 3, 4].map((n) => `<option value="${n}" ${String(n) === String(p.nova_group ?? "") ? "selected" : ""}>${n ? "NOVA " + n : "—"}</option>`).join("")}
+            </select></label>
+          <div class="wide scores">Actuel : ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
+            <span class="muted">${p.scores_source === "OpenFoodFacts" ? "Nutri-Score officiel (Open Food Facts)" : p.scores_source === "calcul" ? "Nutri-Score estimé par NutriX (algorithme général, faux pour boissons, huiles et fromages : mets la note officielle)" : ""}</span></div>
         </div>
         <div class="bar actions">
           <button type="button" id="save" class="primary">Enregistrer</button>
@@ -357,6 +408,10 @@
         image_url: img || null, ingredients_text: val("ingredients_text") || null,
       };
       for (const k of ["energy_kcal", "protein_g", "carbs_g", "sugars_g", "fat_g", "sat_fat_g", "fiber_g", "salt_g"]) upd[k] = num(val(k));
+      const g = val("ns_grade");
+      if (g) Object.assign(upd, { nutriscore_grade: g, nutriscore_score: num(val("ns_score")), scores_source: "OpenFoodFacts" });
+      else Object.assign(upd, { nutriscore_grade: null, nutriscore_score: null, scores_source: null }); // la base recalcule
+      upd.nova_group = num(val("nova_group"));
       if (upd.sugars_g !== null && upd.carbs_g !== null && upd.sugars_g > upd.carbs_g) { say("Sucres > glucides : vérifie.", true); return; }
       if (validate) Object.assign(upd, { status: "valide", validated_by: member.user.id, validated_at: new Date().toISOString() });
       let { error } = await sb.from("products").update(upd).eq("id", productId);
@@ -378,7 +433,9 @@
       }
       await log("products", productId, "modifie", "Modification manuelle");
       if (validate) await log("products", productId, "valide", null);
-      say(validate ? "Enregistré et validé ✓" : "Enregistré ✓ — toujours à valider");
+      const { data: after } = await sb.from("products").select("nutriscore_grade, nova_group").eq("id", productId).single();
+      const tag = after ? ` · Nutri-Score ${String(after.nutriscore_grade || "?").toUpperCase()} · NOVA ${after.nova_group ?? "?"}` : "";
+      say((validate ? "Enregistré et validé ✓" : "Enregistré ✓ — toujours à valider") + tag);
     }
 
     // =====================================================================

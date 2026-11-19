@@ -52,3 +52,15 @@ export function wireLogout() {
     location.href = "index.html";
   });
 }
+
+// Badges Nutri-Score (A à E) et NOVA (1 à 4)
+export function nutriBadge(grade, title = "") {
+  const g = String(grade || "").toLowerCase();
+  const ok = ["a", "b", "c", "d", "e"].includes(g);
+  return `<span class="ns ns-${ok ? g : "x"}" title="Nutri-Score ${esc(title)}">${ok ? g.toUpperCase() : "?"}</span>`;
+}
+export function novaBadge(group, title = "") {
+  const n = Number(group);
+  const ok = [1, 2, 3, 4].includes(n);
+  return `<span class="nova nova-${ok ? n : "x"}" title="NOVA ${esc(title)}">NOVA ${ok ? n : "?"}</span>`;
+}
