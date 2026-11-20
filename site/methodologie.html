@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NutriX Data — Méthodologie (protocole v1)</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+</head>
+<body>
+  <div class="layout">
+    <div id="side"></div>
+    <main style="max-width:980px">
+      <h1>Méthodologie — protocole de recherche v1</h1>
+      <p class="muted">Version 1 · novembre 2026 · Toute modification de la méthode crée une nouvelle version (v2, v3…) ; chaque audit humain enregistre la version utilisée.</p>
+
+      <h2 class="sec">1. Objectif</h2>
+      <p>Construire une base de composition des aliments marocains (produits emballés, plats traditionnels, ingrédients), contrôlée et traçable,
+        pour permettre ensuite le développement et la validation d'un score nutritionnel adapté au contexte marocain.
+        Chaque valeur doit pouvoir être retrouvée jusqu'à sa source, recalculée, et contrôlée par une autre personne.</p>
+
+      <h2 class="sec">2. Niveaux de preuve</h2>
+      <div class="tblwrap"><table><thead><tr><th>Niveau</th><th>Source</th><th>Exemples</th></tr></thead><tbody>
+        <tr><td><span class="lvl lvl-1">S1</span></td><td>Analyse de laboratoire</td><td>Analyse chimique (méthodes AOAC / ISO), pesée expérimentale par l'équipe</td></tr>
+        <tr><td><span class="lvl lvl-2">S2</span></td><td>Source primaire officielle</td><td>Photo de l'étiquette vérifiée par double saisie ; TMCA, CIQUAL, USDA FoodData Central</td></tr>
+        <tr><td><span class="lvl lvl-3">S3</span></td><td>Fabricant ou publication</td><td>Fiche technique, article scientifique, ouvrage, recette documentée avec quantités</td></tr>
+        <tr><td><span class="lvl lvl-4">S4</span></td><td>Base collaborative</td><td>Open Food Facts (contributeurs, non vérifié)</td></tr>
+        <tr><td><span class="lvl lvl-5">S5</span></td><td>Estimation IA</td><td>Valeur lue ou estimée par l'IA — jamais utilisée sans contrôle humain</td></tr>
+      </tbody></table></div>
+      <p class="muted">Le niveau d'un plat est celui de son ingrédient le moins fiable. Les données S4 et S5 ne sont jamais mélangées sans marquage avec les données S1–S3.</p>
+
+      <h2 class="sec">3. Statuts d'un élément</h2>
+      <p><span class="st st-draft">Brouillon</span> → <span class="st st-ver">Vérifié (audit IA)</span> → <span class="st st-val">Validé (audit humain)</span> → <span class="st st-ref">Référence</span></p>
+      <ul>
+        <li><b>Brouillon</b> : collecté par l'agent ou l'équipe.</li>
+        <li><b>Vérifié</b> : l'audit IA a recontrôlé les sources et les calculs (note ≥ 95/100, aucun point bloquant). L'IA ne valide jamais.</li>
+        <li><b>Validé</b> : un membre de l'équipe a fait l'audit humain (checklist complète ; pour un produit, double saisie identique).</li>
+        <li><b>Référence</b> : validé et confirmé par une analyse de laboratoire (S1).</li>
+      </ul>
+      <p>Seuls les éléments <b>validés</b> et <b>référence</b> sont utilisés pour la recherche et pour la construction du score.</p>
+
+      <h2 class="sec">4. Protocole — produit emballé</h2>
+      <ol class="steps">
+        <li><b>Identification</b> : code-barres (EAN), marque, nom exact, quantité, date et lieu de collecte.</li>
+        <li><b>Preuve</b> : photos de la face, du tableau nutritionnel, de la liste d'ingrédients et du code-barres.</li>
+        <li><b>Double saisie</b> : une deuxième personne recopie les valeurs depuis la photo sans voir la première saisie ; tout écart est corrigé sur la photo.</li>
+        <li><b>Normalisation</b> : valeurs pour 100 g (ou 100 ml), kcal, sel = sodium × 2,5.</li>
+        <li><b>Plausibilité</b> : sucres ≤ glucides, AG saturés ≤ lipides, somme des macronutriments ≤ 100 g, énergie ≈ 4P + 4G + 9L + 2F (± 15 %).</li>
+        <li><b>Classification</b> : catégorie, groupe NOVA, additifs (codes E).</li>
+        <li><b>Audit humain</b> avec checklist, nom de l'auditeur et date.</li>
+        <li><b>Suivi</b> : chaque modification est journalisée ; re-vérification tous les 18 mois (reformulations).</li>
+      </ol>
+
+      <h2 class="sec">5. Protocole — plat marocain (méthode des recettes)</h2>
+      <ol class="steps">
+        <li><b>Définition</b> : nom, variante, région.</li>
+        <li><b>Recettes sources</b> : au moins 2 sources indépendantes avec quantités → recette standardisée (version la plus courante ou médiane), choix expliqué.</li>
+        <li><b>Grammes</b> : poids cru, partie comestible ; mesures ménagères converties avec une référence citée.</li>
+        <li><b>Liaison</b> : chaque ingrédient relié à une table officielle (TMCA, CIQUAL, USDA), dans le bon état (cru, sec, trempé).</li>
+        <li><b>Cuisson</b> : méthode par ligne ; pour la friture, seule la part d'huile absorbée est comptée (« % retenu »).</li>
+        <li><b>Pesée</b> : poids cru total, poids cuit égoutté, huile avant / après friture, portion servie.</li>
+        <li><b>Calcul</b> : formules ci-dessous, faites par la base de données (jamais par l'IA).</li>
+        <li><b>Plausibilité</b> : écart Atwater &lt; 10 %, comparaison avec des plats comparables publiés.</li>
+        <li><b>Analyse de laboratoire</b> (sous-échantillon) pour valider la méthode de calcul.</li>
+        <li><b>Audit humain</b> avec checklist.</li>
+      </ol>
+
+      <h2 class="sec">6. Calculs</h2>
+      <div class="formula">grammes comptés = grammes crus × % retenu ÷ 100</div>
+      <div class="formula" style="margin-top:6px">rendement = poids cuit ÷ (poids cru + huile absorbée) &nbsp;&nbsp; huile absorbée = huile avant − huile après</div>
+      <div class="formula" style="margin-top:6px">poids final = Σ grammes comptés × rendement &nbsp;&nbsp;(sinon poids cuit de la source, sinon poids cru — signalé comme limite)</div>
+      <div class="formula" style="margin-top:6px">macronutriment / 100 g = Σ (grammes comptés × valeur / 100 g ÷ 100) ÷ poids final × 100</div>
+      <div class="formula" style="margin-top:6px">vitamine / 100 g = Σ (grammes comptés × valeur crue / 100 g ÷ 100 × facteur de rétention) ÷ poids final × 100</div>
+      <p><b>Protéines, glucides, lipides</b> : la cuisson ne les détruit pas ; leur valeur pour 100 g change seulement avec le poids
+        (évaporation de l'eau = concentration ; absorption d'eau = dilution ; friture = lipides en plus via l'huile absorbée).
+        La cuisson modifie surtout la <i>qualité</i> des protéines (dénaturation qui améliore la digestibilité, réaction de Maillard qui diminue la lysine disponible),
+        ce qui n'est pas pris en compte dans les valeurs de composition.</p>
+      <p><b>Vitamines et minéraux</b> : facteurs de rétention de l'USDA (Table of Nutrient Retention Factors, Release 6, 2007) selon le groupe d'aliment et la méthode.
+        Les vitamines C, B1, B6 et les folates sont les plus sensibles ; les minéraux se perdent surtout dans l'eau jetée.
+        <b>Hypothèse H1</b> : quand le liquide de cuisson est mangé (soupe, tajine), les facteurs « eau gardée / peu d'eau » sont préférés aux facteurs « égoutté ».</p>
+      <p><b>Scores</b> : le Nutri-Score des plats est <i>calculé</i> (algorithme 2023) et n'est pas officiel ; celui des produits vient d'Open Food Facts quand il existe,
+        sinon il est calculé et marqué. La version de l'algorithme est enregistrée pour chaque produit.</p>
+
+      <h2 class="sec">7. Rôle de l'IA et de l'équipe</h2>
+      <div class="tblwrap"><table><thead><tr><th>L'IA peut</th><th>L'IA ne peut pas</th></tr></thead><tbody>
+        <tr><td>Collecter des sources, recopier des valeurs depuis une source lue, relier les ingrédients, détecter les incohérences, proposer des corrections, noter /100</td>
+          <td>Inventer une valeur, une quantité ou une source ; écrire elle-même les valeurs d'un plat ; valider un élément</td></tr>
+      </tbody></table></div>
+
+      <h2 class="sec">8. Standards suivis</h2>
+      <ul>
+        <li>FAO/INFOODS : directives de compilation et de correspondance des aliments (<i>food matching</i>) ; Greenfield &amp; Southgate, <i>Food Composition Data</i> (FAO).</li>
+        <li>EuroFIR : procédure standardisée de calcul des recettes (rendement + rétention).</li>
+        <li>USDA : FoodData Central (SR Legacy) et Table of Nutrient Retention Factors, Release 6.</li>
+        <li>ANSES-CIQUAL ; Table marocaine (TMCA) quand elle est accessible.</li>
+        <li>Nutri-Score (algorithme 2023) ; classification NOVA.</li>
+      </ul>
+
+      <h2 class="sec">9. Reproductibilité et validation du futur score</h2>
+      <ul>
+        <li>Plan d'échantillonnage des produits : quotas par catégorie, marques les plus vendues en priorité.</li>
+        <li>Gel de la base (version v1.0) avant la construction du score ; tout ajout ultérieur va dans une nouvelle version.</li>
+        <li>Séparation des données : 2/3 pour construire le score, 1/3 pour le tester.</li>
+        <li>Validation : comparaison avec Nutri-Score et NOVA, avis d'experts, puis étude auprès des consommateurs (avec avis d'un comité d'éthique).</li>
+      </ul>
+
+      <h2 class="sec">10. Facteurs de rétention utilisés</h2>
+      <p class="muted" id="rf-note"></p>
+      <div id="rf" class="tblwrap">Chargement…</div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { sb, esc, nav, publicNav, wireLogout, optionalMember, methodName, RETENTION_GROUPS, MICROS } from "./app.js";
+    (async () => {
+      const member = await optionalMember();
+      document.getElementById("side").outerHTML = member ? nav("methodologie.html") : publicNav("methodologie.html");
+      if (member) wireLogout();
+      const { data, error } = await sb.from("retention_factors").select("*").order("food_group").order("cooking_method");
+      const box = document.getElementById("rf");
+      if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
+      const nuts = MICROS.filter(([k]) => data.some((r) => r.nutrient === k));
+      const lines = {};
+      data.forEach((r) => { (lines[r.code] ||= { ...r, v: {} }).v[r.nutrient] = r.retention_pct; });
+      const list = Object.values(lines);
+      const unverified = data.filter((r) => !r.verified).length;
+      document.getElementById("rf-note").innerHTML = `Source : USDA Table of Nutrient Retention Factors, Release 6 (2007) —
+        <a href="https://www.ars.usda.gov/Services/docs.htm?docid=9448" target="_blank" rel="noopener">page officielle</a>. Pourcentage du nutriment conservé après cuisson.
+        ${unverified ? `<span class="tag warn">${unverified} valeurs transcrites, contrôle ligne par ligne sur le PDF en cours</span>` : `<span class="tag ok">toutes contrôlées</span>`}`;
+      box.innerHTML = `<table><thead><tr><th>Code</th><th>Groupe</th><th>Méthode</th>${nuts.map(([, l]) => `<th>${esc(l.replace(/ \(.*\)/, ""))}</th>`).join("")}<th>Contrôlé</th></tr></thead><tbody>
+        ${list.map((r) => `<tr><td title="${esc(r.line_label)}">${esc(r.code)}</td><td>${esc(RETENTION_GROUPS[r.food_group] || r.food_group)}</td><td>${esc(methodName(r.cooking_method))}</td>
+          ${nuts.map(([k]) => `<td>${r.v[k] ?? "–"}</td>`).join("")}<td>${r.verified ? "✓" : "–"}</td></tr>`).join("")}</tbody></table>`;
+    })();
+  </script>
+</body>
+</html>

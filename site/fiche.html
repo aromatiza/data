@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NutriX Data — Fiche de preuve</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+</head>
+<body>
+  <div id="app" class="layout">
+    <div id="side"></div>
+    <main id="main"><p class="muted">Chargement…</p></main>
+  </div>
+
+  <script type="module">
+    import { sb, esc, nav, publicNav, wireLogout, optionalMember, nutriBadge, novaBadge, ratingBadge, levelBadge, statusBadge,
+      LEVELS, COOKING_METHODS, methodName, RETENTION_GROUPS, MICROS, auditBadges } from "./app.js";
+    import { renderAuditPanel, productChecks } from "./audit.js";
+
+    const params = new URLSearchParams(location.search);
+    const dishId = Number(params.get("plat")) || null;
+    const productId = Number(params.get("produit")) || null;
+    const main = document.getElementById("main");
+    let member = null;
+
+    const fmt = (x, d = 1) => (x === null || x === undefined || x === "" || isNaN(Number(x))) ? "–" : Number(x).toFixed(d);
+    const fdate = (s) => s ? new Date(s).toLocaleDateString("fr-FR", { year: "numeric", month: "short", day: "numeric" }) : "–";
+    const link = (url, text) => /^https?:\/\//.test(url || "") ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text || url)}</a>` : esc(text || "");
+    const KIND_LABEL = {
+      photo_face: "Photo face", photo_tableau: "Photo tableau nutritionnel", photo_ingredients: "Photo ingrédients",
+      photo_codebarre: "Photo code-barres", page_web: "Page web", recette_source: "Recette (source)",
+      table_composition: "Table de composition", article_scientifique: "Article scientifique", analyse_labo: "Analyse de laboratoire",
+      pesee: "Pesée", autre: "Autre",
+    };
+    const VERDICT = { ok: "OK", corrige: "Corrigé", a_revoir: "À revoir", auto_valide: "Vérifié (ancien : auto-validé)", renvoye_collecte: "Renvoyé à la collecte" };
+    const DECISION = { valide: "Validé", a_corriger: "À corriger", rejete: "Rejeté" };
+
+    // ---------------------------------------------------------------- Preuves, audits, traçabilité (communs)
+    function evidenceHtml(list) {
+      if (!list.length) return `<p class="muted">Aucune preuve enregistrée.</p>`;
+      return `<div class="tblwrap"><table><thead><tr><th>Type</th><th>Preuve</th><th>Niveau</th><th>Ce que dit la source</th><th>Consultée</th></tr></thead><tbody>
+        ${list.map((e) => {
+          const isImg = /^photo_/.test(e.kind) && /^https:\/\//.test(e.url || "");
+          return `<tr><td>${esc(KIND_LABEL[e.kind] || e.kind)}</td>
+            <td>${isImg ? `<a href="${esc(e.url)}" target="_blank" rel="noopener"><img src="${esc(e.url)}" alt="" style="width:90px;height:90px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px;display:block"></a>` : ""}${link(e.url, e.title)}
+              <br><span class="muted">${e.added_by === "agent" ? "ajoutée par l'agent IA" : "ajoutée par l'équipe"}</span></td>
+            <td>${levelBadge(e.source_level)}</td><td>${esc(e.quote || "")}</td><td>${fdate(e.accessed_at || e.created_at)}</td></tr>`;
+        }).join("")}</tbody></table></div>`;
+    }
+
+    function auditsHtml(ai, human) {
+      const h = human.length ? human.map((a) => {
+        const ck = Object.entries(a.checklist || {});
+        const ok = ck.filter(([, v]) => v).length;
+        return `<div class="panel" style="margin:8px 0"><b>${esc(DECISION[a.decision] || a.decision)}</b> · ${esc(a.auditor_name || "membre de l'équipe")} · ${fdate(a.created_at)} · protocole ${esc(a.protocol_version)}
+          <br><span class="muted">Checklist : ${ok}/${ck.length} critères cochés${a.double_entry ? ` · double saisie ${a.double_entry.all_match ? "identique ✓" : "avec écarts"}` : ""}</span>
+          ${a.comment ? `<br>${esc(a.comment)}` : ""}</div>`;
+      }).join("") : `<p class="muted">Pas encore d'audit humain.</p>`;
+      const i = ai.length ? `<div class="tblwrap"><table><thead><tr><th>Date</th><th>Note</th><th>Verdict</th><th>Problèmes relevés</th><th>Corrections</th></tr></thead><tbody>
+        ${ai.map((a) => `<tr><td>${fdate(a.created_at)}</td><td>${a.score ?? "–"}/100</td><td>${esc(VERDICT[a.verdict] || a.verdict)}</td>
+          <td>${(Array.isArray(a.issues) ? a.issues : []).map((x) => esc(typeof x === "string" ? x : (x.issue || x.message || JSON.stringify(x)))).join("<br>") || "–"}</td>
+          <td>${(Array.isArray(a.changes) ? a.changes : []).map((c) => `${esc(c.table || "")}.${esc(c.column || "")} : ${esc(c.old ?? "")} → ${esc(c.new ?? "")}${c.source_url ? " " + link(c.source_url, "[source]") : ""}`).join("<br>") || "–"}</td></tr>`).join("")}
+        </tbody></table></div>` : `<p class="muted">Pas d'audit IA.</p>`;
+      return `<h3 style="font-size:15px">Audit humain (décision finale)</h3>${h}<h3 style="font-size:15px;margin-top:16px">Audits IA (contrôle automatique, ne valide jamais)</h3>${i}`;
+    }
+
+    async function teamLog(table, id) {
+      if (!member) return "";
+      const { data } = await sb.from("review_log").select("action, reason, created_at").eq("table_name", table).eq("row_id", id).order("created_at");
+      if (!data?.length) return "";
+      return `<h3 style="font-size:15px;margin-top:16px">Journal (équipe)</h3><div class="timeline">${data.map((r) =>
+        `<div><b>${fdate(r.created_at)}</b> · ${esc(r.action)}${r.reason ? " — " + esc(r.reason) : ""}</div>`).join("")}</div>`;
+    }
+
+    function evidenceForm(kind, id) {
+      if (!member || member.role === "agent") return "";
+      return `<details class="noprint" style="margin-top:10px"><summary>+ Ajouter une preuve</summary>
+        <div class="de-grid" style="margin-top:10px">
+          <label>Type<select id="ev_kind">${Object.entries(KIND_LABEL).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></label>
+          <label>Niveau<select id="ev_level">${Object.entries(LEVELS).map(([k, [c, n]]) => `<option value="${k}">${c} · ${esc(n)}</option>`).join("")}</select></label>
+          <label>Titre *<input id="ev_title" placeholder="ex: Photo du tableau, Marjane Kénitra"></label>
+          <label>Lien (https)<input id="ev_url" type="url"></label>
+          <label>Ou photo<input id="ev_file" type="file" accept="image/jpeg,image/png,image/webp"></label>
+          <label>Ce que dit la source<input id="ev_quote" placeholder="ex: 250 g de pois chiches pour 6 personnes"></label>
+        </div>
+        <button class="primary" id="ev_save">Enregistrer la preuve</button> <span id="ev_msg"></span></details>`;
+    }
+
+    function wireEvidenceForm(kind, id) {
+      const btn = document.getElementById("ev_save"); if (!btn) return;
+      btn.onclick = async () => {
+        const msg = document.getElementById("ev_msg");
+        const title = document.getElementById("ev_title").value.trim();
+        let url = document.getElementById("ev_url").value.trim() || null;
+        const file = document.getElementById("ev_file").files?.[0];
+        if (!title) { msg.textContent = "Titre obligatoire."; msg.className = "tag warn"; return; }
+        if (url && !/^https:\/\//.test(url)) { msg.textContent = "Lien https obligatoire."; msg.className = "tag warn"; return; }
+        btn.disabled = true;
+        if (file) {
+          const path = `preuves/${kind}/${id}/${Date.now()}.${(file.type.split("/")[1] || "jpg").replace("jpeg", "jpg")}`;
+          const up = await sb.storage.from("photos").upload(path, file, { contentType: file.type, upsert: false });
+          if (up.error) { msg.textContent = up.error.message; msg.className = "tag warn"; btn.disabled = false; return; }
+          url = sb.storage.from("photos").getPublicUrl(path).data.publicUrl;
+        }
+        const { error } = await sb.from("evidence").insert({
+          entity_kind: kind, entity_id: id, kind: document.getElementById("ev_kind").value, title, url,
+          source_level: Number(document.getElementById("ev_level").value), quote: document.getElementById("ev_quote").value.trim() || null,
+          added_by: "equipe",
+        });
+        if (error) { msg.textContent = error.message; msg.className = "tag warn"; btn.disabled = false; return; }
+        location.reload();
+      };
+    }
+
+    function limitsHtml(items) {
+      if (!items.length) return `<p class="muted">Aucune limite détectée automatiquement.</p>`;
+      return `<ul>${items.map((t) => `<li>${t}</li>`).join("")}</ul>`;
+    }
+
+    // ---------------------------------------------------------------- PLAT
+    async function loadDish() {
+      const [{ data: d, error }, { data: n }] = await Promise.all([
+        sb.from("dishes").select("*").eq("id", dishId).maybeSingle(),
+        sb.from("dish_nutrition").select("*").eq("dish_id", dishId).maybeSingle(),
+      ]);
+      if (error) throw error;
+      if (!d) { main.innerHTML = `<p class="notice">Plat introuvable ou pas encore validé (seuls les plats validés sont publics).</p>`; return; }
+      const { data: recs } = await sb.from("recipes").select("*").eq("dish_id", dishId).neq("status", "rejete").order("version", { ascending: false }).limit(1);
+      const recipe = recs?.[0] || null;
+      const [linesQ, evQ, aiQ, huQ, wQ, rfQ, grpQ] = await Promise.all([
+        recipe ? sb.from("recipe_ingredients").select("*, ingredients(*)").eq("recipe_id", recipe.id).order("id") : { data: [] },
+        sb.from("evidence").select("*").eq("entity_kind", "dish").eq("entity_id", dishId).order("created_at"),
+        sb.from("audits").select("*").eq("entity_kind", "dish").eq("entity_id", dishId).order("created_at", { ascending: false }),
+        sb.from("human_audits").select("*").eq("entity_kind", "dish").eq("entity_id", dishId).order("created_at", { ascending: false }),
+        recipe ? sb.from("weighings").select("*").eq("recipe_id", recipe.id).order("performed_on") : { data: [] },
+        sb.from("retention_factors").select("*"),
+        d.group_id ? sb.from("dish_groups").select("name_fr").eq("id", d.group_id).maybeSingle() : { data: null },
+      ]);
+      const lines = linesQ.data || [];
+      const rfs = rfQ.data || [];
+      const rf = (group, method, nut) => {
+        if (!method || method === "cru") return 1;
+        const r = rfs.find((x) => x.food_group === group && x.cooking_method === method && x.nutrient === nut);
+        return r ? Number(r.retention_pct) / 100 : null;
+      };
+      const final = Number(n?.final_weight_g) || null;
+      const portion = Number(d.portion_g) || null;
+      const per100 = (v) => (final && v !== null && v !== undefined) ? v / final * 100 : null;
+      const level = n?.worst_source_level;
+
+      // Lignes de calcul
+      const rows = lines.map((l) => {
+        const i = l.ingredients;
+        const g = Number(l.grams) * (Number(l.retained_pct ?? 100) / 100);
+        const m = l.cooking_method || recipe?.cooking_method || null;
+        const kc = i ? g * Number(i.energy_kcal) / 100 : null;
+        const pr = i ? g * Number(i.protein_g) / 100 : null;
+        const rC = i ? rf(i.retention_group, m, "vit_c_mg") : null;
+        const rB1 = i ? rf(i.retention_group, m, "thiamin_mg") : null;
+        return { l, i, g, m, kc, pr, rC, rB1 };
+      });
+      const totalK = rows.reduce((a, r) => a + (r.kc || 0), 0);
+
+      const limits = [];
+      if (n?.weight_basis === "non_mesure") limits.push("Poids après cuisson <b>non mesuré</b> : les valeurs pour 100 g sont calculées sur le poids cru (sous-estimées si l'eau s'évapore, sur-estimées si le plat absorbe de l'eau).");
+      if (n?.n_method_missing) limits.push(`${n.n_method_missing} ligne(s) sans méthode de cuisson : aucune perte de vitamines appliquée pour ces lignes.`);
+      if (n?.n_retention_missing) limits.push(`${n.n_retention_missing} ligne(s) sans facteur de rétention pour leur groupe d'aliment et leur méthode.`);
+      if (n?.n_micros_missing) limits.push(`${n.n_micros_missing} ingrédient(s) sans vitamines/minéraux contrôlés : les valeurs de micronutriments sont incomplètes.`);
+      if (rfs.length && rfs.some((x) => !x.verified)) limits.push("Facteurs de rétention USDA transcrits mais pas encore contrôlés ligne par ligne sur le PDF original.");
+      if (Number(level) >= 4) limits.push(`Au moins un ingrédient vient d'une source de niveau ${LEVELS[level]?.[0]} (${esc(LEVELS[level]?.[1] || "")}).`);
+      if (n?.atwater_gap_pct > 10) limits.push(`Écart Atwater ${fmt(n.atwater_gap_pct)} % (> 10 %).`);
+      if (!portion) limits.push("Portion habituelle non renseignée.");
+      if (n?.nutriscore_grade) limits.push("Nutri-Score <b>calculé</b> (algorithme 2023) : ce n'est pas un score officiel ; le Nutri-Score est conçu pour les produits emballés.");
+
+      const micros = n?.micros_raw_100g || {}, microsC = n?.micros_cooked_100g || {};
+      const microRows = MICROS.filter(([k]) => micros[k] !== undefined).map(([k, label, u]) => {
+        const a = Number(micros[k]), b = Number(microsC[k]);
+        const kept = a ? b / a * 100 : null;
+        return `<tr><td>${esc(label)}</td><td>${fmt(a, 2)} ${u}</td><td>${fmt(b, 2)} ${u}</td><td>${kept === null ? "–" : `<span class="tag ${kept < 80 ? "warn" : "ok"}">${fmt(kept, 0)} %</span>`}</td>
+          <td>${portion ? fmt(b * portion / 100, 2) + " " + u : "–"}</td></tr>`;
+      }).join("");
+
+      main.innerHTML = `
+        <div class="head" style="display:flex;gap:16px;align-items:center;margin-bottom:12px">
+          ${/^https:\/\//.test(d.image_url || "") ? `<div><img src="${esc(d.image_url)}" alt="" style="width:120px;height:120px;object-fit:cover;border-radius:12px"><div class="muted" style="font-size:11px;max-width:120px">${esc(d.image_credit || "")}</div></div>` : ""}
+          <div><h1 style="margin:0">${esc(d.name_fr)}</h1>
+            <div class="muted">${esc(d.name_darija || "")}${d.name_ar ? " · " + esc(d.name_ar) : ""}${grpQ.data ? " · groupe " + esc(grpQ.data.name_fr) + (d.variant_label ? " (" + esc(d.variant_label) + ")" : "") : ""}${d.region ? " · " + esc(d.region) : ""}</div>
+            <div class="scores" style="margin-top:6px">${statusBadge(d.status, level)} ${levelBadge(level)} ${ratingBadge(n?.rating)} ${nutriBadge(n?.nutriscore_grade, n?.nutriscore_score ?? "")}
+              <span class="muted" style="font-size:12px">calculé, non officiel</span> ${novaBadge(n?.nova_group)} ${auditBadges(d.audit_score, d.validated_source)}</div>
+            <div class="actions noprint" style="margin-top:8px">
+              <button onclick="window.print()">Imprimer / PDF</button>
+              ${member && member.role !== "agent" ? `<a href="modifier.html?plat=${d.id}"><button class="accent">Modifier</button></a>` : ""}
+              <a href="jury.html"><button>Toutes les fiches</button></a></div>
+          </div></div>
+
+        <h2 class="sec">1. Valeurs nutritionnelles</h2>
+        <div class="tblwrap"><table><thead><tr><th></th><th>Pour 100 g de plat cuit</th><th>Pour une portion ${portion ? "(" + fmt(portion, 0) + " g)" : ""}</th></tr></thead><tbody>
+          ${[["Énergie", "energy_kcal_100g", "kcal", 0], ["Protéines", "protein_g_100g", "g", 1], ["Glucides disponibles", "carbs_g_100g", "g", 1], ["dont sucres", "sugars_g_100g", "g", 1],
+            ["Lipides", "fat_g_100g", "g", 1], ["dont AG saturés", "sat_fat_g_100g", "g", 1], ["Fibres", "fiber_g_100g", "g", 1], ["Sel", "salt_g_100g", "g", 2]]
+            .map(([l, k, u, dd]) => `<tr><td>${l}</td><td>${fmt(n?.[k], dd)} ${u}</td><td>${portion ? fmt(Number(n?.[k]) * portion / 100, dd) + " " + u : "–"}</td></tr>`).join("")}
+        </tbody></table></div>
+
+        <h2 class="sec">2. Comment ce plat a été calculé (méthode des recettes)</h2>
+        <ol class="steps">
+          <li><b>Recette standardisée</b> : ${recipe ? `version ${recipe.version}, ${recipe.servings ?? "?"} portions` : "aucune recette"} · méthode principale : ${esc(methodName(recipe?.cooking_method))}${recipe?.liquid_consumed ? " · liquide de cuisson mangé" : ""}.</li>
+          <li><b>Chaque ingrédient</b> est pesé cru (partie comestible) et relié à une table de composition officielle. Pour la friture, seule la part d'huile absorbée est comptée (« % retenu »).</li>
+          <li><b>Somme des nutriments</b> : Σ (grammes comptés × valeur pour 100 g ÷ 100).</li>
+          <li><b>Poids final</b> : ${n?.weight_basis === "pese" ? `pesé par l'équipe (${n.n_weighings} pesée(s)), rendement ${fmt(n.yield_pct)} %` : n?.weight_basis === "source" ? "poids après cuisson donné par une source" : "non mesuré → poids cru utilisé"} :
+            poids cru ${fmt(n?.raw_weight_g, 0)} g → poids final ${fmt(final, 0)} g.</li>
+          <li><b>Valeur pour 100 g</b> = somme ÷ poids final × 100. Vitamines : × facteur de rétention selon le groupe d'aliment et la méthode de cuisson (USDA, Release 6).</li>
+          <li><b>Contrôle</b> : énergie recalculée par Atwater (4P + 4G + 9L + 2F) : écart ${fmt(n?.atwater_gap_pct)} %.</li>
+        </ol>
+        <div class="formula">Énergie / 100 g = ${fmt(totalK, 0)} kcal ÷ ${fmt(final, 0)} g × 100 = ${fmt(per100(totalK))} kcal</div>
+        <div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>Texte d'origine</th><th>g crus</th><th>% retenu</th><th>g comptés</th><th>Ingrédient (table)</th><th>Niveau</th><th>Cuisson</th><th>kcal</th><th>Prot. g</th><th>Rétention vit. C / B1</th></tr></thead><tbody>
+          ${rows.map((r) => `<tr><td>${esc(r.l.raw_label)}</td><td>${fmt(r.l.grams)}</td><td>${fmt(r.l.retained_pct ?? 100, 0)} %</td><td>${fmt(r.g)}</td>
+            <td>${r.i ? `${link(r.i.source_url, r.i.name_fr)}<br><span class="muted">${esc(r.i.source)} ${esc(r.i.source_code || "")}${r.i.retention_group ? " · " + esc(RETENTION_GROUPS[r.i.retention_group] || r.i.retention_group) : ""}</span>` : `<span class="tag warn">non relié</span>`}</td>
+            <td>${r.i ? levelBadge(r.i.source_level) : ""}</td><td>${esc(methodName(r.m))}</td><td>${fmt(r.kc, 0)}</td><td>${fmt(r.pr, 1)}</td>
+            <td>${r.i ? `${r.rC === null ? "?" : fmt(r.rC * 100, 0) + " %"} / ${r.rB1 === null ? "?" : fmt(r.rB1 * 100, 0) + " %"}` : ""}</td></tr>`).join("")}
+        </tbody></table></div>
+
+        <h2 class="sec">3. Vitamines et minéraux : effet de la cuisson</h2>
+        <p class="muted">Les protéines, glucides et lipides ne disparaissent pas à la cuisson : leur quantité pour 100 g change seulement avec le poids
+          (l'eau qui s'évapore concentre, l'eau absorbée dilue, l'huile de friture ajoute des lipides). Les vitamines sensibles à la chaleur et à l'eau
+          (C, B1, B6, folates) sont en partie détruites ou passent dans l'eau de cuisson : on applique les facteurs de rétention USDA.</p>
+        ${microRows ? `<div class="tblwrap"><table><thead><tr><th>Nutriment</th><th>Sans perte (cru) / 100 g</th><th>Après cuisson / 100 g</th><th>Conservé</th><th>Par portion</th></tr></thead><tbody>${microRows}</tbody></table></div>`
+          : `<p class="notice">Vitamines et minéraux des ingrédients pas encore renseignés (ils sont ajoutés chaque jour depuis l'USDA par l'agent d'audit).</p>`}
+
+        <div class="panel noprint">
+          <h3 style="margin-top:0;font-size:15px">Simulateur : et si on changeait la méthode de cuisson ?</h3>
+          <div class="de-grid">
+            <label>Méthode pour tout le plat<select id="sim-method">${COOKING_METHODS.slice(1).map(([k, v]) => `<option value="${k}" ${k === (recipe?.cooking_method || "mijote") ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+            <label>Rendement (poids cuit ÷ poids cru) : <span id="sim-yv"></span><input id="sim-yield" type="range" min="40" max="200" step="5" value="${Math.round(Number(n?.yield_pct) || 100)}"></label>
+          </div>
+          <div id="sim-out"></div>
+        </div>
+
+        <h2 class="sec">4. Preuves</h2>
+        ${evidenceHtml(evQ.data || [])}
+        ${evidenceForm("dish", d.id)}
+        <h3 style="font-size:15px;margin-top:16px">Pesées expérimentales</h3>
+        ${(wQ.data || []).length ? `<div class="tblwrap"><table><thead><tr><th>Date</th><th>Par</th><th>Cru (g)</th><th>Cuit (g)</th><th>Huile absorbée (g)</th><th>Rendement</th><th>Portion</th><th>Notes</th></tr></thead><tbody>
+          ${wQ.data.map((w) => { const oil = (w.oil_before_g ?? null) !== null && (w.oil_after_g ?? null) !== null ? w.oil_before_g - w.oil_after_g : null;
+            return `<tr><td>${fdate(w.performed_on)}</td><td>${esc(w.performed_by || "")}</td><td>${fmt(w.raw_total_g, 0)}</td><td>${fmt(w.cooked_total_g, 0)}</td><td>${oil === null ? "–" : fmt(oil, 0)}</td>
+              <td>${fmt(w.cooked_total_g / (Number(w.raw_total_g) + (oil > 0 ? oil : 0)) * 100)} %</td><td>${fmt(w.portion_g, 0)}</td><td>${esc(w.notes || "")}${w.photo_url ? " " + link(w.photo_url, "[photo]") : ""}</td></tr>`; }).join("")}
+          </tbody></table></div>` : `<p class="muted">Aucune pesée pour l'instant. Protocole : peser tous les ingrédients crus, cuire, peser le plat cuit égoutté ; pour la friture, peser l'huile avant et après.</p>`}
+        ${member && member.role !== "agent" && recipe ? `<details class="noprint" style="margin-top:10px"><summary>+ Ajouter une pesée</summary>
+          <div class="de-grid" style="margin-top:10px">
+            <label>Date<input id="w_date" type="date" value="${new Date().toISOString().slice(0, 10)}"></label>
+            <label>Par<input id="w_by" value="${esc(member.name || "")}"></label>
+            <label>Poids cru total (g) *<input id="w_raw" type="number" step="0.1" min="0"></label>
+            <label>Poids cuit égoutté (g) *<input id="w_cooked" type="number" step="0.1" min="0"></label>
+            <label>Huile avant friture (g)<input id="w_ob" type="number" step="0.1" min="0"></label>
+            <label>Huile après friture (g)<input id="w_oa" type="number" step="0.1" min="0"></label>
+            <label>Portion servie (g)<input id="w_portion" type="number" step="0.1" min="0"></label>
+            <label>Notes<input id="w_notes"></label>
+          </div><button class="primary" id="w_save">Enregistrer la pesée</button> <span id="w_msg"></span></details>` : ""}
+
+        <h2 class="sec">5. Traçabilité et audits</h2>
+        <dl class="kv"><dt>Ajouté le</dt><dd>${fdate(d.created_at)}</dd><dt>Dernier audit IA</dt><dd>${fdate(d.audited_at)}${d.audit_score != null ? " · " + d.audit_score + "/100" : ""}</dd>
+          <dt>Validé le</dt><dd>${fdate(d.validated_at)}${d.validated_source ? " (" + (d.validated_source === "humain" ? "audit humain" : "audit IA, ancien système") + ")" : ""}</dd>
+          <dt>Confiance déclarée</dt><dd>${esc(d.confidence || "–")}</dd></dl>
+        ${d.method_notes ? `<details style="margin-top:10px"><summary>Notes de méthode (conversions, choix des quantités)</summary><p style="white-space:pre-wrap">${esc(d.method_notes)}</p></details>` : ""}
+        ${auditsHtml(aiQ.data || [], huQ.data || [])}
+        ${await teamLog("dishes", d.id)}
+
+        <h2 class="sec">6. Limites connues</h2>
+        ${limitsHtml(limits)}
+        <div id="audit-slot" class="noprint"></div>`;
+
+      // Simulateur (calcul côté navigateur, mêmes facteurs que la base)
+      const sim = () => {
+        const method = document.getElementById("sim-method").value;
+        const y = Number(document.getElementById("sim-yield").value) / 100;
+        document.getElementById("sim-yv").textContent = Math.round(y * 100) + " %";
+        const eff = rows.reduce((a, r) => a + r.g, 0);
+        const fw = eff * y;
+        let k = 0, p = 0, f = 0; const out = {};
+        let missing = 0;
+        rows.forEach((r) => {
+          if (!r.i) return;
+          k += r.g * Number(r.i.energy_kcal) / 100; p += r.g * Number(r.i.protein_g) / 100; f += r.g * Number(r.i.fat_g) / 100;
+          MICROS.forEach(([key]) => {
+            if (r.i[key] === null || r.i[key] === undefined) return;
+            const fac = rf(r.i.retention_group, method, key);
+            if (fac === null) missing++;
+            out[key] = (out[key] || 0) + r.g * Number(r.i[key]) / 100 * (fac ?? 1);
+          });
+        });
+        const microTxt = MICROS.filter(([key]) => out[key] !== undefined).map(([key, label, u]) => `${esc(label)} ${fmt(out[key] / fw * 100, 2)} ${u}`).join(" · ");
+        document.getElementById("sim-out").innerHTML = `
+          <div class="formula">Pour 100 g : ${fmt(k / fw * 100)} kcal · protéines ${fmt(p / fw * 100, 2)} g · lipides ${fmt(f / fw * 100, 2)} g</div>
+          <p class="muted" style="margin:6px 0 0">${microTxt || "Pas encore de vitamines/minéraux sur les ingrédients."}</p>
+          ${missing ? `<p class="muted">Facteur manquant pour certains groupes avec « ${esc(methodName(method))} » : 100 % appliqué par défaut.</p>` : ""}
+          <p class="muted">Les protéines totales restent ${fmt(p, 1)} g : seule la concentration change avec le rendement.</p>`;
+      };
+      document.getElementById("sim-method").onchange = sim;
+      document.getElementById("sim-yield").oninput = sim;
+      sim();
+
+      wireEvidenceForm("dish", d.id);
+      const ws = document.getElementById("w_save");
+      if (ws) ws.onclick = async () => {
+        const v = (id) => document.getElementById(id).value;
+        const num = (x) => x === "" ? null : Number(x);
+        const row = { recipe_id: recipe.id, performed_on: v("w_date"), performed_by: v("w_by") || null, raw_total_g: num(v("w_raw")), cooked_total_g: num(v("w_cooked")),
+          oil_before_g: num(v("w_ob")), oil_after_g: num(v("w_oa")), portion_g: num(v("w_portion")), notes: v("w_notes") || null };
+        const msg = document.getElementById("w_msg");
+        if (!(row.raw_total_g > 0) || !(row.cooked_total_g > 0)) { msg.textContent = "Poids cru et cuit obligatoires."; msg.className = "tag warn"; return; }
+        const { error: e } = await sb.from("weighings").insert(row);
+        if (e) { msg.textContent = e.message; msg.className = "tag warn"; return; }
+        await sb.from("recipes").update({ cooked_weight_basis: "pese" }).eq("id", recipe.id);
+        await sb.from("evidence").insert({ entity_kind: "dish", entity_id: d.id, kind: "pesee", title: `Pesée du ${row.performed_on}${row.performed_by ? " par " + row.performed_by : ""}`, source_level: 1, quote: `cru ${row.raw_total_g} g → cuit ${row.cooked_total_g} g`, added_by: "equipe" });
+        location.reload();
+      };
+
+      if (member && member.role !== "agent" && ["a_valider", "verifie", "draft"].includes(d.status)) {
+        renderAuditPanel(document.getElementById("audit-slot"), {
+          kind: "dish", entity: { ...d, dish_id: d.id }, member, onDone: () => setTimeout(() => location.reload(), 900),
+        });
+        if (location.hash === "#audit") document.getElementById("audit")?.scrollIntoView();
+      }
+    }
+
+    // ---------------------------------------------------------------- PRODUIT
+    async function loadProduct() {
+      const { data: p, error } = await sb.from("products").select("*, product_additives(additives(e_code, name_fr))").eq("id", productId).maybeSingle();
+      if (error) throw error;
+      if (!p) { main.innerHTML = `<p class="notice">Produit introuvable ou pas encore validé (seuls les produits validés sont publics).</p>`; return; }
+      const [evQ, aiQ, huQ] = await Promise.all([
+        sb.from("evidence").select("*").eq("entity_kind", "product").eq("entity_id", productId).order("created_at"),
+        sb.from("audits").select("*").eq("entity_kind", "product").eq("entity_id", productId).order("created_at", { ascending: false }),
+        sb.from("human_audits").select("*").eq("entity_kind", "product").eq("entity_id", productId).order("created_at", { ascending: false }),
+      ]);
+      const adds = (p.product_additives || []).map((x) => x.additives).filter(Boolean);
+      const checks = productChecks(p);
+      const vs = { OpenFoodFacts: "Open Food Facts (S4)", photo_etiquette_ia: "Lu par l'IA sur la photo (S5)", etiquette: "Étiquette vérifiée par double saisie (S2)", manuel: "Saisie manuelle (S3)" };
+      const limits = [];
+      if (Number(p.source_level) >= 4) limits.push(`Valeurs de niveau ${LEVELS[p.source_level]?.[0]} : pas encore vérifiées par double saisie sur la photo de l'étiquette.`);
+      if (p.scores_source === "calcul") limits.push("Nutri-Score calculé par NutriX (algorithme général) : faux pour boissons, huiles et fromages.");
+      if (p.nova_source === "estimation_ia") limits.push("Groupe NOVA estimé par l'IA depuis la liste d'ingrédients.");
+      checks.filter(([ok]) => !ok).forEach(([, t]) => limits.push("Contrôle non passé : " + esc(t)));
+
+      main.innerHTML = `
+        <div style="display:flex;gap:16px;align-items:center;margin-bottom:12px">
+          ${/^https:\/\//.test(p.image_url || "") ? `<img src="${esc(p.image_url)}" alt="" style="width:120px;height:120px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:12px">` : ""}
+          <div><h1 style="margin:0">${esc(p.name)}</h1>
+            <div class="muted">${esc(p.brand || "")} · ${esc(p.quantity || "")} · code-barres ${esc(p.barcode)}</div>
+            <div class="scores" style="margin-top:6px">${statusBadge(p.status, p.source_level)} ${levelBadge(p.source_level)} ${ratingBadge(p.rating)} ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)} ${auditBadges(p.audit_score, p.validated_source)}</div>
+            <div class="muted" style="margin-top:4px">Score : ${esc(p.algorithm_version || "–")} · NOVA : ${esc(p.nova_source || "–")}</div>
+            <div class="actions noprint" style="margin-top:8px"><button onclick="window.print()">Imprimer / PDF</button>
+              ${member && member.role !== "agent" ? `<a href="modifier.html?produit=${p.id}"><button class="accent">Modifier</button></a>` : ""}
+              <a href="jury.html"><button>Toutes les fiches</button></a></div>
+          </div></div>
+
+        <h2 class="sec">1. Valeurs pour 100 g</h2>
+        <p class="muted">Origine des valeurs : <b>${esc(vs[p.values_source] || p.values_source || "–")}</b>${p.double_entry_ok ? " · double saisie identique ✓" : ""}</p>
+        <div class="tblwrap"><table><thead><tr><th>Énergie</th><th>Lipides</th><th>AG saturés</th><th>Glucides</th><th>Sucres</th><th>Fibres</th><th>Protéines</th><th>Sel</th></tr></thead><tbody>
+          <tr><td>${fmt(p.energy_kcal, 0)} kcal</td><td>${fmt(p.fat_g)} g</td><td>${fmt(p.sat_fat_g)} g</td><td>${fmt(p.carbs_g)} g</td><td>${fmt(p.sugars_g)} g</td><td>${fmt(p.fiber_g)} g</td><td>${fmt(p.protein_g)} g</td><td>${fmt(p.salt_g, 2)} g</td></tr>
+        </tbody></table></div>
+
+        <h2 class="sec">2. Contrôles automatiques de plausibilité</h2>
+        <ul>${checks.map(([ok, t]) => `<li><span class="${ok ? "de-ok" : "de-bad"}">${ok ? "✓" : "✗"}</span> ${esc(t)}</li>`).join("")}</ul>
+
+        <h2 class="sec">3. Composition</h2>
+        <p>${esc(p.ingredients_text || "Liste d'ingrédients non disponible.")}</p>
+        <p class="muted">Additifs : ${adds.length ? adds.map((a) => esc(a.e_code + (a.name_fr && a.name_fr !== a.e_code ? " (" + a.name_fr + ")" : ""))).join(", ") : "aucun"}</p>
+
+        <h2 class="sec">4. Preuves</h2>
+        ${evidenceHtml(evQ.data || [])}
+        ${evidenceForm("product", p.id)}
+
+        <h2 class="sec">5. Traçabilité et audits</h2>
+        <dl class="kv"><dt>Ajouté le</dt><dd>${fdate(p.created_at)}</dd><dt>Dernier audit IA</dt><dd>${fdate(p.audited_at)}${p.audit_score != null ? " · " + p.audit_score + "/100" : ""}</dd>
+          <dt>Validé le</dt><dd>${fdate(p.validated_at)}</dd><dt>À re-vérifier avant le</dt><dd>${fdate(p.recheck_due)} <span class="muted">(reformulation possible)</span></dd></dl>
+        ${auditsHtml(aiQ.data || [], huQ.data || [])}
+        ${await teamLog("products", p.id)}
+
+        <h2 class="sec">6. Limites connues</h2>
+        ${limitsHtml(limits)}
+        <div id="audit-slot" class="noprint"></div>`;
+
+      wireEvidenceForm("product", p.id);
+      if (member && member.role !== "agent" && ["a_valider", "verifie", "draft"].includes(p.status)) {
+        renderAuditPanel(document.getElementById("audit-slot"), { kind: "product", entity: p, member, onDone: () => setTimeout(() => location.reload(), 900) });
+        if (location.hash === "#audit") document.getElementById("audit")?.scrollIntoView();
+      }
+    }
+
+    (async () => {
+      member = await optionalMember();
+      document.getElementById("side").outerHTML = member ? nav("jury.html") : publicNav("jury.html");
+      if (member) wireLogout();
+      try {
+        if (dishId) await loadDish();
+        else if (productId) await loadProduct();
+        else main.innerHTML = `<p class="notice">Aucune fiche choisie. <a href="jury.html">Voir toutes les fiches</a></p>`;
+      } catch (err) {
+        main.innerHTML = `<p class="notice">Erreur : ${esc(err.message || err)}</p>`;
+      }
+    })();
+  </script>
+</body>
+</html>

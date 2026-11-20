@@ -12,13 +12,13 @@
     <div id="side"></div>
     <main>
       <h1>Plats à valider</h1>
-      <p class="muted">Vérifie la source et le calcul avant de valider. Les valeurs viennent de la table <b>ingredients</b> (méthode des recettes), jamais de l'IA.
-        Une carte = un plat et ses variantes : choisis la variante, puis Valider / Rejeter / Modifier.</p>
+      <p class="muted">Protocole v1 : l'IA ne valide jamais. Ouvre la <b>fiche</b> (preuves + calcul détaillé), fais l'<b>audit humain</b> (checklist) : c'est la seule façon de valider.
+        <span class="st st-ver">Vérifié (audit IA)</span> = l'audit IA n'a trouvé aucun problème bloquant, à auditer en priorité.</p>
       <div id="dish-cats" class="catbar"></div>
       <div id="dishes">Chargement…</div>
 
       <h1 style="margin-top:34px">Produits à valider</h1>
-      <p class="muted">Vérifie l'étiquette (photo ou texte), les valeurs et les additifs.</p>
+      <p class="muted">Audit humain d'un produit = double saisie des valeurs depuis la photo de l'étiquette + checklist. Après validation, le produit passe au niveau S2.</p>
       <div id="product-cats" class="catbar"></div>
       <div id="products">Chargement…</div>
     </main>
@@ -26,7 +26,7 @@
 
   <script type="module">
     import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, ratingBadge,
-      loadCategories, categoryName, renderCategoryBar, matchCategory, auditBadges } from "./app.js";
+      loadCategories, categoryName, renderCategoryBar, matchCategory, auditBadges, statusBadge, levelBadge } from "./app.js";
 
     let member = null;
     let dishCats = [], productCats = [];
@@ -48,7 +48,7 @@
     async function loadDishes() {
       const box = document.getElementById("dishes");
       const { data, error } = await sb.from("dish_nutrition")
-        .select("*").eq("status", "a_valider").order("name_fr");
+        .select("*").in("status", ["a_valider", "verifie"]).order("name_fr");
       if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
 
       const ids = data.map((d) => d.dish_id);
@@ -132,7 +132,7 @@
         <div><b>${esc(d.name_fr)}</b><br>
           <span class="muted">${d.n_ingredients} ingrédients${d.region ? " · " + esc(d.region) : ""}${d.portion_g ? " · portion " + esc(d.portion_g) + " g" : ""}</span> ${conf}
           ${srcs ? `<div class="muted" style="font-size:12px;margin-top:4px">${srcs}</div>` : `<br><span class="tag warn">aucune source</span>`}
-          <div class="scores">${auditBadges(d.audit_score, d.validated_source)}</div></div>
+          <div class="scores">${statusBadge(d.status, d.worst_source_level)} ${levelBadge(d.worst_source_level)} ${auditBadges(d.audit_score, d.validated_source)}</div></div>
         <div>${d.energy_kcal_100g ?? "–"} kcal / 100 g<br>
           <span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"} (g/100 g)</span>
           <div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group, d.nova_is_manual ? "(choisi à la main)" : "(estimé)")}</div>
@@ -140,9 +140,8 @@
           ${d.n_unlinked > 0 ? `<span class="tag warn">${d.n_unlinked} ingrédient(s) non relié(s)</span>` : ""}</div></div>
         <div class="actions" data-id="${d.dish_id}">
           <a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a>
-          ${d._done ? `<span class="tag ok">Déjà validé</span>` : `
-          <button class="primary" data-kind="dish" data-act="valide">Valider</button>
-          <button data-kind="dish" data-act="rejete">Rejeter</button>`}
+          ${d._done ? `<span class="tag ok">Déjà validé</span> <a href="fiche.html?plat=${d.dish_id}"><button type="button">Fiche</button></a>` : `
+          <a href="fiche.html?plat=${d.dish_id}#audit"><button type="button" class="primary">Fiche + audit humain</button></a>`}
         </div>`;
     }
 
@@ -161,8 +160,8 @@
     // ---------- Produits ----------
     async function loadProducts() {
       const { data, error } = await sb.from("products")
-        .select("id, name, brand, barcode, category, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, values_source, rating, audit_score, validated_source, product_additives(additives(e_code, name_fr))")
-        .eq("status", "a_valider").order("created_at", { ascending: false });
+        .select("id, name, brand, barcode, category, status, source_level, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, values_source, rating, audit_score, validated_source, product_additives(additives(e_code, name_fr))")
+        .in("status", ["a_valider", "verifie"]).order("created_at", { ascending: false });
       const box = document.getElementById("products");
       if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
       products = data;
@@ -190,7 +189,7 @@
             <td>${img}</td>
             <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span><br>
               <span class="tag">${esc(categoryName(productCats, p.category))}</span>
-              <div class="scores">${auditBadges(p.audit_score, p.validated_source)}</div></td>
+              <div class="scores">${statusBadge(p.status, p.source_level)} ${levelBadge(p.source_level)} ${auditBadges(p.audit_score, p.validated_source)}</div></td>
             <td>${p.energy_kcal ?? "–"} kcal · sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g<br>${src}
               <div class="scores">${ratingBadge(p.rating)} ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
               ${p.scores_source === "calcul" ? `<span class="tag warn" title="Calcul NutriX (algorithme général) : à vérifier sur Open Food Facts">estimé</span>` : ""}
@@ -199,8 +198,7 @@
             <td>${add}</td>
             <td class="actions" data-id="${p.id}">
               <a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a>
-              <button class="primary" data-kind="product" data-act="valide">Valider</button>
-              <button data-kind="product" data-act="rejete">Rejeter</button>
+              <a href="fiche.html?produit=${p.id}#audit"><button type="button" class="primary">Fiche + audit humain</button></a>
             </td>
           </tr>`;
       }).join("");

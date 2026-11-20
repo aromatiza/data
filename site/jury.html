@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NutriX Data — Preuves scientifiques</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+</head>
+<body>
+  <div class="layout">
+    <div id="side"></div>
+    <main>
+      <h1>Base marocaine de composition des aliments — preuves scientifiques</h1>
+      <p class="muted" style="max-width:820px">Chaque plat et chaque produit a une fiche de preuve : sources, niveau de preuve (S1 à S5), calcul détaillé,
+        effet de la cuisson, audits IA et audit humain. Seuls les éléments <b>validés par un audit humain</b> sont publics.
+        La méthode complète est sur la page <a href="methodologie.html">Méthodologie</a>.</p>
+
+      <div class="cards" id="stats"></div>
+      <div class="panel" id="levels"></div>
+
+      <h2 class="sec">Plats validés</h2>
+      <input id="q" placeholder="Rechercher un plat ou un produit…" style="width:100%;max-width:420px;padding:8px;border:1px solid var(--line);border-radius:8px;font:inherit;margin-bottom:10px">
+      <div id="dishes" class="tblwrap">Chargement…</div>
+
+      <h2 class="sec">Produits validés</h2>
+      <div id="products" class="tblwrap">Chargement…</div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { sb, esc, nav, publicNav, wireLogout, optionalMember, nutriBadge, novaBadge, ratingBadge, levelBadge, statusBadge, LEVELS } from "./app.js";
+
+    let dishes = [], products = [];
+    const fdate = (s) => s ? new Date(s).toLocaleDateString("fr-FR") : "–";
+    const basis = { pese: "pesé", source: "sourcé", non_mesure: "non mesuré" };
+
+    function render() {
+      const q = document.getElementById("q").value.trim().toLowerCase();
+      const dl = dishes.filter((d) => !q || (d.name_fr + " " + (d.name_darija || "")).toLowerCase().includes(q));
+      const pl = products.filter((p) => !q || (p.name + " " + (p.brand || "") + " " + p.barcode).toLowerCase().includes(q));
+      document.getElementById("dishes").innerHTML = dl.length ? `<table><thead><tr><th>Plat</th><th>Statut</th><th>Niveau</th><th>kcal/100 g</th><th>Scores</th><th>Poids cuit</th><th>Preuves</th><th>Validé</th><th></th></tr></thead><tbody>
+        ${dl.map((d) => `<tr><td><b>${esc(d.name_fr)}</b><br><span class="muted">${esc(d.name_darija || "")}</span></td>
+          <td>${statusBadge(d.status, d.worst_source_level)}</td><td>${levelBadge(d.worst_source_level)}</td><td>${d.energy_kcal_100g ?? "–"}</td>
+          <td><div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade)} ${novaBadge(d.nova_group)}</div></td>
+          <td>${esc(basis[d.weight_basis] || "–")}</td><td>${d.n_ev}</td><td>${fdate(d.validated_at)}</td>
+          <td><a href="fiche.html?plat=${d.dish_id}"><button class="primary">Fiche</button></a></td></tr>`).join("")}</tbody></table>`
+        : `<p class="muted">Aucun plat validé${q ? " pour cette recherche" : ""}.</p>`;
+      document.getElementById("products").innerHTML = pl.length ? `<table><thead><tr><th>Produit</th><th>Statut</th><th>Niveau</th><th>kcal/100 g</th><th>Scores</th><th>Preuves</th><th>Validé</th><th></th></tr></thead><tbody>
+        ${pl.map((p) => `<tr><td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span></td>
+          <td>${statusBadge(p.status, p.source_level)}</td><td>${levelBadge(p.source_level)}</td><td>${p.energy_kcal ?? "–"}</td>
+          <td><div class="scores">${ratingBadge(p.rating)} ${nutriBadge(p.nutriscore_grade)} ${novaBadge(p.nova_group)}</div></td>
+          <td>${p.n_ev}</td><td>${fdate(p.validated_at)}</td>
+          <td><a href="fiche.html?produit=${p.id}"><button class="primary">Fiche</button></a></td></tr>`).join("")}</tbody></table>`
+        : `<p class="muted">Aucun produit validé${q ? " pour cette recherche" : ""} : les produits passent par la double saisie et l'audit humain avant d'être publiés.</p>`;
+    }
+
+    (async () => {
+      const member = await optionalMember();
+      document.getElementById("side").outerHTML = member ? nav("jury.html") : publicNav("jury.html");
+      if (member) wireLogout();
+
+      const [st, dn, dd, pr, ev] = await Promise.all([
+        sb.rpc("public_stats"),
+        sb.from("dish_nutrition").select("dish_id, name_fr, status, energy_kcal_100g, rating, nutriscore_grade, nova_group, weight_basis, worst_source_level").eq("status", "valide"),
+        sb.from("dishes").select("id, name_darija, validated_at").eq("status", "valide"),
+        sb.from("products").select("id, name, brand, barcode, status, source_level, energy_kcal, rating, nutriscore_grade, nova_group, validated_at").eq("status", "valide").order("name"),
+        sb.from("evidence").select("entity_kind, entity_id"),
+      ]);
+      const evCount = {};
+      (ev.data || []).forEach((e) => { const k = e.entity_kind + e.entity_id; evCount[k] = (evCount[k] || 0) + 1; });
+      const extra = Object.fromEntries((dd.data || []).map((x) => [x.id, x]));
+      dishes = (dn.data || []).map((d) => ({ ...d, ...(extra[d.dish_id] || {}), n_ev: evCount["dish" + d.dish_id] || 0 })).sort((a, b) => a.name_fr.localeCompare(b.name_fr));
+      products = (pr.data || []).map((p) => ({ ...p, n_ev: evCount["product" + p.id] || 0 }));
+
+      const s = st.data || {};
+      const sum = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
+      document.getElementById("stats").innerHTML = [
+        [s.dishes?.valide || 0, `Plats validés (sur ${sum(s.dishes)})`],
+        [s.products?.valide || 0, `Produits validés (sur ${sum(s.products)})`],
+        [s.ingredients || 0, "Ingrédients (tables officielles)"],
+        [s.evidence || 0, "Preuves enregistrées"],
+        [s.human_audits || 0, "Audits humains"],
+        [s.ai_audits || 0, "Audits IA"],
+        [s.weighings || 0, "Pesées expérimentales"],
+      ].map(([n, l]) => `<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+      const lv = (o) => Object.entries(LEVELS).map(([k, [c]]) => `${levelBadge(k)} ${o?.[k] || 0}`).join(" &nbsp; ");
+      document.getElementById("levels").innerHTML = `<b>Niveaux de preuve</b>
+        <p class="muted" style="margin:4px 0 8px">${Object.entries(LEVELS).map(([k, [c, n]]) => `${c} = ${esc(n)}`).join(" · ")}</p>
+        <div>Ingrédients : ${lv(s.ingredients_by_level)}</div><div style="margin-top:6px">Produits : ${lv(s.products_by_level)}</div>`;
+      render();
+      document.getElementById("q").oninput = render;
+    })();
+  </script>
+</body>
+</html>

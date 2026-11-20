@@ -93,7 +93,7 @@
           <td><div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group)}</div><div class="scores">${auditBadges(d.audit_score, d.validated_source)}</div></td>
           <td>${d.energy_kcal_100g ?? "–"} kcal<br><span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"}</span></td>
           <td>${fmtDate(d.validated_at)}</td>
-          <td><a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a></td>
+          <td class="actions"><a href="fiche.html?plat=${d.dish_id}"><button type="button" class="primary">Fiche</button></a> <a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a></td>
         </tr>`; }).join("")}</tbody></table>` : `<p class="muted">Aucun plat validé${q ? " pour cette recherche" : ""}.</p>`;
 
       document.getElementById("products").innerHTML = ps.length ? `<table>
@@ -105,7 +105,7 @@
             ${p.scores_source === "calcul" ? `<span class="tag warn">estimé</span>` : ""}${p.nova_source === "estimation_ia" ? ` <span class="tag warn">NOVA IA</span>` : ""}</div><div class="scores">${auditBadges(p.audit_score, p.validated_source)}</div></td>
           <td>${p.energy_kcal ?? "–"} kcal<br><span class="muted">sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g</span></td>
           <td>${fmtDate(p.validated_at)}</td>
-          <td><a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a></td>
+          <td class="actions"><a href="fiche.html?produit=${p.id}"><button type="button" class="primary">Fiche</button></a> <a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a></td>
         </tr>`).join("")}</tbody></table>` : `<p class="muted">Aucun produit validé${q ? " pour cette recherche" : ""}.</p>`;
     }
 

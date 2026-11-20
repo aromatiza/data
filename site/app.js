@@ -38,6 +38,8 @@ export function nav(active) {
     ["a-valider.html", "À valider"],
     ["valides.html", "Validés"],
     ["produits.html", "Produits"],
+    ["jury.html", "Preuves (jury)"],
+    ["methodologie.html", "Méthodologie"],
   ];
   return `<nav class="side">
     <div class="brand">NutriX Data</div>
@@ -131,7 +133,84 @@ export function auditBadges(score, validatedSource) {
     html += `<span class="audit audit-${c}" title="Score de l'audit scientifique IA">Audit ${s}<small>/100</small></span>`;
   }
   if (validatedSource === "audit_ia") {
-    html += ` <span class="audit-ok" title="Validé automatiquement par l'audit IA (très précis)">✓ Validé par l’audit IA</span>`;
+    html += ` <span class="audit-ok" title="L'audit IA a vérifié cet élément (note ≥ 95). La validation finale reste humaine.">✓ Vérifié par l’audit IA</span>`;
   }
   return html;
+}
+
+// =====================================================================
+// Protocole de recherche v1 : niveaux de preuve, statuts, cuisson, nutriments
+// =====================================================================
+export const LEVELS = {
+  1: ["S1", "Analyse de laboratoire"],
+  2: ["S2", "Source primaire officielle (étiquette vérifiée, TMCA, CIQUAL, USDA)"],
+  3: ["S3", "Fabricant ou publication"],
+  4: ["S4", "Base collaborative (Open Food Facts)"],
+  5: ["S5", "Estimation IA"],
+};
+export function levelBadge(level) {
+  const l = Number(level);
+  if (!LEVELS[l]) return `<span class="lvl lvl-x" title="Niveau de preuve inconnu">S?</span>`;
+  return `<span class="lvl lvl-${l}" title="${esc(LEVELS[l][1])}">${LEVELS[l][0]}</span>`;
+}
+
+// Statuts : brouillon (a_valider) → vérifié (audit IA) → validé (audit humain) → référence (S1)
+export function statusBadge(status, level) {
+  if (status === "valide" && Number(level) === 1) return `<span class="st st-ref" title="Validé + analyse de laboratoire">Référence</span>`;
+  const map = {
+    draft: ["Brouillon", "st-draft"], a_valider: ["Brouillon", "st-draft"],
+    verifie: ["Vérifié (audit IA)", "st-ver"], valide: ["Validé (audit humain)", "st-val"], rejete: ["Rejeté", "st-rej"],
+  };
+  const [t, c] = map[status] || [status || "?", "st-draft"];
+  return `<span class="st ${c}">${esc(t)}</span>`;
+}
+
+export const COOKING_METHODS = [
+  ["", "— non précisé —"],
+  ["cru", "Cru (pas de cuisson)"],
+  ["bouilli_peu_eau", "Bouilli, peu d'eau, égoutté"],
+  ["bouilli_egoutte", "Bouilli, couvert d'eau, égoutté"],
+  ["bouilli_eau_gardee", "Bouilli, eau gardée (absorbée ou mangée)"],
+  ["mijote", "Mijoté"],
+  ["revenu_mijote", "Revenu puis mijoté (tajine)"],
+  ["braise", "Braisé"],
+  ["frit", "Frit"],
+  ["four", "Au four"],
+  ["vapeur", "Vapeur (couscous)"],
+  ["grille", "Grillé"],
+];
+export const methodName = (m) => (COOKING_METHODS.find(([k]) => k === (m || "")) || [m, m || "non précisé"])[1];
+
+export const RETENTION_GROUPS = {
+  legumes_feuilles: "Légumes feuilles", legumes_racines: "Légumes racines", legumes_autres: "Autres légumes",
+  legumineuses: "Légumineuses", cereales_pates: "Pâtes, semoule", riz: "Riz", cereales_bouillie: "Céréales en bouillie",
+  viande_boeuf: "Bœuf", viande_agneau: "Agneau", volaille: "Volaille", poisson: "Poisson", oeufs: "Œufs",
+  pommes_de_terre: "Pommes de terre", laitiers: "Produits laitiers", fruits: "Fruits", autre: "Autre",
+};
+
+export const MICROS = [
+  ["vit_c_mg", "Vitamine C", "mg"], ["thiamin_mg", "Vitamine B1 (thiamine)", "mg"], ["riboflavin_mg", "Vitamine B2 (riboflavine)", "mg"],
+  ["niacin_mg", "Vitamine B3 (niacine)", "mg"], ["vit_b6_mg", "Vitamine B6", "mg"], ["folate_ug", "Folates (B9)", "µg"],
+  ["vit_b12_ug", "Vitamine B12", "µg"], ["vit_a_ug", "Vitamine A (ER)", "µg"], ["vit_e_mg", "Vitamine E", "mg"],
+  ["vit_d_ug", "Vitamine D", "µg"], ["iron_mg", "Fer", "mg"], ["calcium_mg", "Calcium", "mg"],
+  ["magnesium_mg", "Magnésium", "mg"], ["zinc_mg", "Zinc", "mg"], ["potassium_mg", "Potassium", "mg"],
+];
+
+// Nav publique (jury, sans connexion)
+export function publicNav(active) {
+  const items = [["jury.html", "Preuves scientifiques"], ["methodologie.html", "Méthodologie"]];
+  return `<nav class="side">
+    <div class="brand">NutriX Data</div>
+    <div class="muted" style="color:#cfe0d6;margin:-12px 0 12px">Base marocaine de composition des aliments</div>
+    ${items.map(([href, label]) => `<a href="${href}" class="${href === active ? "on" : ""}">${label}</a>`).join("")}
+    <a href="index.html" style="margin-top:auto">Espace équipe</a>
+  </nav>`;
+}
+
+// Session facultative : renvoie le membre si connecté, sinon null (sans redirection)
+export async function optionalMember() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return null;
+  const { data: m } = await sb.from("team_members").select("role, full_name").eq("user_id", session.user.id).maybeSingle();
+  return m ? { user: session.user, role: m.role, name: m.full_name } : null;
 }
