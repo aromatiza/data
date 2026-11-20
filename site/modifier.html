@@ -31,7 +31,8 @@
   </div>
 
   <script type="module">
-    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, nutrixRating, ratingBadge } from "./app.js";
+    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, nutrixRating, ratingBadge, COOKING_METHODS } from "./app.js";
+    const methodOptions = (sel) => COOKING_METHODS.map(([k, v]) => `<option value="${k}" ${k === (sel || "") ? "selected" : ""}>${esc(v)}</option>`).join("");
 
     const params = new URLSearchParams(location.search);
     const dishId = Number(params.get("plat")) || null;
@@ -137,8 +138,10 @@
           <td><input data-f="raw_label" value="${esc(l.raw_label)}" placeholder="ex: 3 c. à soupe d'huile d'olive"></td>
           <td class="num"><input data-f="grams" type="number" step="0.1" min="0.1" value="${l.grams ?? ""}"></td>
           <td><select data-f="ingredient_id">${ingredientOptions(l.ingredient_id)}</select></td>
+          <td><select data-f="cooking_method" title="Méthode de cuisson de cette ligne (vide = méthode de la recette)">${methodOptions(l.cooking_method)}</select></td>
+          <td class="num"><input data-f="retained_pct" type="number" step="1" min="1" max="100" value="${l.retained_pct ?? 100}" title="Part retenue dans le plat : 100 % sauf huile de friture (part absorbée)"></td>
           <td class="del"><button type="button" data-del="${k}" title="Supprimer">✕</button></td>
-        </tr>`).join("") || `<tr><td colspan="4" class="muted">Aucune ligne.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="6" class="muted">Aucune ligne.</td></tr>`;
       computePreview();
     }
 
@@ -147,7 +150,7 @@
       const byId = Object.fromEntries(ingredients.map((i) => [i.id, i]));
       let raw = 0, kcal = 0, p = 0, g = 0, l = 0, f = 0, s = 0, su = 0, sf = 0, fvlW = 0, solidW = 0, unlinked = 0, novaMain = 0, novaAll = 0, novaMissing = 0;
       for (const ln of lines) {
-        const w = num(ln.grams) || 0; raw += w;
+        const w = (num(ln.grams) || 0) * ((num(ln.retained_pct) ?? 100) / 100); raw += w;
         const i = byId[ln.ingredient_id];
         if (!i) { unlinked++; continue; }
         kcal += w * (i.energy_kcal || 0) / 100; p += w * (i.protein_g || 0) / 100;
@@ -232,14 +235,17 @@
         <h2>Recette ${recipe ? "(version " + recipe.version + ")" : ""}</h2>
         <div class="form">
           <label>Nombre de portions<input id="servings" type="number" min="1" value="${recipe?.servings ?? ""}"></label>
-          <label>Poids après cuisson (g)<input id="cooked_weight_g" type="number" step="1" min="0" value="${recipe?.cooked_weight_g ?? ""}"></label>
+          <label>Poids après cuisson (g, source)<input id="cooked_weight_g" type="number" step="1" min="0" value="${recipe?.cooked_weight_g ?? ""}"></label>
+          <label>Méthode de cuisson principale<select id="r_method">${methodOptions(recipe?.cooking_method)}</select></label>
+          <label style="flex-direction:row;align-items:center;gap:8px"><input id="r_liquid" type="checkbox" ${recipe?.liquid_consumed ? "checked" : ""} style="width:auto"> Le liquide de cuisson est mangé (soupe, tajine)</label>
           <label class="wide">Notes recette<textarea id="r_notes" rows="2">${esc(recipe?.notes || "")}</textarea></label>
         </div>
 
         <h2>Ingrédients</h2>
-        <p class="muted">Grammes = poids cru, partie comestible. Pense à la matière grasse de cuisson (huile, smen, beurre).</p>
+        <p class="muted">Grammes = poids cru, partie comestible. Pense à la matière grasse de cuisson (huile, smen, beurre).
+          « % retenu » = 100 % sauf pour l'huile de friture : mets la part absorbée (pesée ou source). La méthode de cuisson sert aux facteurs de rétention des vitamines.</p>
         <table>
-          <thead><tr><th>Texte d'origine</th><th>Grammes</th><th>Ingrédient de la base (valeurs / 100 g)</th><th></th></tr></thead>
+          <thead><tr><th>Texte d'origine</th><th>Grammes</th><th>Ingrédient de la base (valeurs / 100 g)</th><th>Cuisson</th><th>% retenu</th><th></th></tr></thead>
           <tbody id="lines"></tbody>
         </table>
         <p><button type="button" id="add-line" class="accent">+ Ajouter une ligne</button></p>
@@ -276,7 +282,7 @@
 
         <div class="bar actions">
           <button type="button" id="save" class="primary">Enregistrer</button>
-          <button type="button" id="save-validate" class="accent">Enregistrer et valider</button>
+          <button type="button" id="save-validate" class="accent">Enregistrer puis audit humain</button>
           <a href="a-valider.html"><button type="button">Retour</button></a>
           <span id="msg"></span>
         </div>`;
@@ -352,18 +358,18 @@
         nova_manual: num(val("nova_manual")),
         nova_source: num(val("nova_manual")) ? "manuel" : null,
       };
-      if (validate) Object.assign(dishUpd, { status: "valide", validated_source: "humain", validated_by: member.user.id, validated_at: new Date().toISOString() });
       let { error } = await sb.from("dishes").update(dishUpd).eq("id", dishId);
       if (error) { say(error.message, true); return; }
 
       if (!recipe) {
         const { data, error: e2 } = await sb.from("recipes")
-          .insert({ dish_id: dishId, version: 1, status: validate ? "valide" : "a_valider" }).select().single();
+          .insert({ dish_id: dishId, version: 1, status: "a_valider" }).select().single();
         if (e2) { say(e2.message, true); return; }
         recipe = data;
       }
-      const recUpd = { servings: num(val("servings")), cooked_weight_g: num(val("cooked_weight_g")), notes: val("r_notes") || null };
-      if (validate) recUpd.status = "valide";
+      const recUpd = { servings: num(val("servings")), cooked_weight_g: num(val("cooked_weight_g")), notes: val("r_notes") || null,
+        cooking_method: val("r_method") || null, liquid_consumed: document.getElementById("r_liquid").checked };
+      if (recipe.cooked_weight_basis !== "pese") recUpd.cooked_weight_basis = recUpd.cooked_weight_g ? "source" : "non_mesure";
       ({ error } = await sb.from("recipes").update(recUpd).eq("id", recipe.id));
       if (error) { say(error.message, true); return; }
 
@@ -373,7 +379,8 @@
         removed = [];
       }
       for (const l of lines) {
-        const row = { raw_label: String(l.raw_label).trim(), grams: num(l.grams), ingredient_id: l.ingredient_id || null };
+        const row = { raw_label: String(l.raw_label).trim(), grams: num(l.grams), ingredient_id: l.ingredient_id || null,
+          cooking_method: l.cooking_method || null, retained_pct: Math.min(100, Math.max(1, num(l.retained_pct) ?? 100)) };
         if (l.id) ({ error } = await sb.from("recipe_ingredients").update(row).eq("id", l.id));
         else {
           const { data, error: e3 } = await sb.from("recipe_ingredients").insert({ ...row, recipe_id: recipe.id }).select().single();
@@ -383,12 +390,10 @@
       }
 
       await log("dishes", dishId, "modifie", "Modification manuelle");
-      if (validate) await log("dishes", dishId, "valide", null);
+      if (validate) { location.href = `fiche.html?plat=${dishId}#audit`; return; }
 
       const { data: n } = await sb.from("dish_nutrition").select("energy_kcal_100g").eq("dish_id", dishId).maybeSingle();
-      say(validate
-        ? `Enregistré et validé ✓ (${fmt(n?.energy_kcal_100g)} kcal / 100 g)`
-        : `Enregistré ✓ (${fmt(n?.energy_kcal_100g)} kcal / 100 g) — toujours à valider`);
+      say(`Enregistré ✓ (${fmt(n?.energy_kcal_100g)} kcal / 100 g) — validation par l'audit humain (fiche)`);
     }
 
     // =====================================================================
@@ -443,7 +448,7 @@
         </div>
         <div class="bar actions">
           <button type="button" id="save" class="primary">Enregistrer</button>
-          <button type="button" id="save-validate" class="accent">Enregistrer et valider</button>
+          <button type="button" id="save-validate" class="accent">Enregistrer puis audit humain</button>
           <a href="a-valider.html"><button type="button">Retour</button></a>
           <span id="msg"></span>
         </div>`;
@@ -480,7 +485,6 @@
       upd.nova_group = num(val("nova_group"));
       if (upd.nova_group !== window.__novaInit) upd.nova_source = upd.nova_group ? "manuel" : null;
       if (upd.sugars_g !== null && upd.carbs_g !== null && upd.sugars_g > upd.carbs_g) { say("Sucres > glucides : vérifie.", true); return; }
-      if (validate) Object.assign(upd, { status: "valide", validated_source: "humain", validated_by: member.user.id, validated_at: new Date().toISOString() });
       let { error } = await sb.from("products").update(upd).eq("id", productId);
       if (error) { say(error.message, true); return; }
 
@@ -499,10 +503,10 @@
         if (error) { say(error.message, true); return; }
       }
       await log("products", productId, "modifie", "Modification manuelle");
-      if (validate) await log("products", productId, "valide", null);
+      if (validate) { location.href = `fiche.html?produit=${productId}#audit`; return; }
       const { data: after } = await sb.from("products").select("nutriscore_grade, nova_group").eq("id", productId).single();
       const tag = after ? ` · Nutri-Score ${String(after.nutriscore_grade || "?").toUpperCase()} · NOVA ${after.nova_group ?? "?"}` : "";
-      say((validate ? "Enregistré et validé ✓" : "Enregistré ✓ — toujours à valider") + tag);
+      say("Enregistré ✓ — validation par l'audit humain (fiche)" + tag);
     }
 
     // =====================================================================
