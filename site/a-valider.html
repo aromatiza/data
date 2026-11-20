@@ -32,6 +32,7 @@
     let dishCats = [], productCats = [];
     let dishes = [];          // variantes à valider (dish_nutrition + infos de dishes)
     let groupsById = {};      // dish_groups
+    let siblings = {};        // clé de groupe -> variantes déjà validées du même groupe (lecture seule)
     let products = [];
     const dishState = { cat: "" }, productState = { cat: "" };
     const selected = {};      // clé de groupe -> id de la variante choisie
@@ -64,6 +65,20 @@
         const { data: groups } = await sb.from("dish_groups")
           .select("id, name_fr, name_ar, name_darija, category").in("id", gids);
         (groups || []).forEach((g) => { groupsById[g.id] = g; });
+        // Variantes déjà validées des mêmes groupes : affichées comme boutons ✓ dans la carte
+        const [sn, sd] = await Promise.all([
+          sb.from("dish_nutrition").select("*").eq("status", "valide"),
+          sb.from("dishes").select("id, name_ar, name_darija, category, region, confidence, image_url, image_credit, group_id, variant_label, audit_score, validated_source, recipes(sources, version)")
+            .in("group_id", gids).eq("status", "valide"),
+        ]);
+        siblings = {};
+        if (!sn.error && !sd.error) {
+          const sById = Object.fromEntries((sd.data || []).map((x) => [x.id, x]));
+          (sn.data || []).filter((x) => sById[x.dish_id]).forEach((x) => {
+            const v = { ...x, ...sById[x.dish_id], _done: true };
+            (siblings[groupKey(v)] ||= []).push(v);
+          });
+        }
       }
       renderDishes();
     }
@@ -81,23 +96,24 @@
         if (!groups[k]) { groups[k] = []; order.push(k); }
         groups[k].push(d);
       });
-      box.innerHTML = `<div class="vcards">${order.map((k) => cardHtml(k, groups[k])).join("")}</div>`;
+      box.innerHTML = `<div class="vcards">${order.map((k) => cardHtml(k, groups[k], siblings[k] || [])).join("")}</div>`;
     }
 
-    function cardHtml(key, variants) {
-      if (!variants.some((v) => v.dish_id === selected[key])) selected[key] = variants[0].dish_id;
-      const first = variants[0];
+    function cardHtml(key, pending, done = []) {
+      const variants = pending.concat(done);
+      if (!variants.some((v) => v.dish_id === selected[key])) selected[key] = pending[0].dish_id;
+      const first = pending[0];
       const g = first.group_id ? groupsById[first.group_id] : null;
       const title = g?.name_fr || first.name_fr;
       const darija = g ? g.name_darija : first.name_darija;
       const ar = g ? g.name_ar : first.name_ar;
       const cat = categoryName(dishCats, g?.category || first.category);
       const tabs = first.group_id ? `<div class="vtabs">${variants.map((v) =>
-        `<button type="button" class="vtab ${v.dish_id === selected[key] ? "on" : ""}" data-pick="${v.dish_id}">${esc(v.variant_label || v.name_fr)}</button>`
+        `<button type="button" class="vtab ${v.dish_id === selected[key] ? "on" : ""}" data-pick="${v.dish_id}" title="${v._done ? "Déjà validé" : "À valider"}">${v._done ? "✓ " : ""}${esc(v.variant_label || v.name_fr)}</button>`
       ).join("")}</div>` : "";
       return `<article class="vcard" data-group="${esc(key)}">
         <div class="vhead"><b>${esc(title)}</b>${darija ? ` <span>· ${esc(darija)}</span>` : ""}${ar ? ` <span>· ${esc(ar)}</span>` : ""}
-          <span class="tag">${esc(cat)}</span>${first.group_id ? ` <span class="muted">${variants.length} variante(s) à valider</span>` : ""}</div>
+          <span class="tag">${esc(cat)}</span>${first.group_id ? ` <span class="muted">${pending.length} à valider${done.length ? ` · ${done.length} déjà validée(s) ✓` : ""}</span>` : ""}</div>
         ${tabs}
         <div class="vbody">${variantBody(variants.find((v) => v.dish_id === selected[key]))}</div>
       </article>`;
@@ -124,8 +140,9 @@
           ${d.n_unlinked > 0 ? `<span class="tag warn">${d.n_unlinked} ingrédient(s) non relié(s)</span>` : ""}</div></div>
         <div class="actions" data-id="${d.dish_id}">
           <a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a>
+          ${d._done ? `<span class="tag ok">Déjà validé</span>` : `
           <button class="primary" data-kind="dish" data-act="valide">Valider</button>
-          <button data-kind="dish" data-act="rejete">Rejeter</button>
+          <button data-kind="dish" data-act="rejete">Rejeter</button>`}
         </div>`;
     }
 
@@ -225,7 +242,12 @@
       }
       btn.disabled = true;
       if (btn.dataset.kind === "dish") {
-        if (await decideDish(id, act, reason)) { dishes = dishes.filter((d) => d.dish_id !== id); renderDishes(); }
+        if (await decideDish(id, act, reason)) {
+          const d = dishes.find((x) => x.dish_id === id);
+          dishes = dishes.filter((x) => x.dish_id !== id);
+          if (d && act === "valide" && d.group_id) (siblings[groupKey(d)] ||= []).push({ ...d, status: "valide", _done: true });
+          renderDishes();
+        }
       } else {
         if (await decideProduct(id, act, reason)) { products = products.filter((p) => p.id !== id); renderProducts(); }
       }

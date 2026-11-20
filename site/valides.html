@@ -44,6 +44,9 @@
       loadCategories, categoryName, renderCategoryBar, matchCategory, auditBadges } from "./app.js";
 
     let dishes = [], products = [];
+    let groupsById = {};
+    const selected = {};      // clé de groupe -> id de la variante affichée
+    const groupKey = (d) => d.group_id ? "g" + d.group_id : "d" + d.dish_id;
     let dishCats = [], productCats = [];
     const dishState = { cat: "" }, productState = { cat: "" };
     const norm = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -61,25 +64,37 @@
 
     function render() {
       const q = norm(document.getElementById("q").value.trim());
-      const dq = dishes.filter((d) => !q || norm(d.name_fr + " " + (d.variant_label || "") + " " + (d.name_darija || "") + " " + (d.name_ar || "")).includes(q));
+      const dq = dishes.filter((d) => !q || norm(d.name_fr + " " + (d.variant_label || "") + " " + (d.name_darija || "") + " " + (d.name_ar || "") + " " + (groupsById[d.group_id]?.name_fr || "")).includes(q));
       const pq = products.filter((p) => !q || norm(p.name + " " + (p.brand || "") + " " + p.barcode).includes(q));
       renderCategoryBar(document.getElementById("dish-cats"), dishCats, dq, (d) => d.category, dishState, render);
       renderCategoryBar(document.getElementById("product-cats"), productCats, pq, (p) => p.category, productState, render);
       const ds = sorted(dq.filter((d) => matchCategory(dishState, d.category)), "name_fr");
       const ps = sorted(pq.filter((p) => matchCategory(productState, p.category)), "name");
-      document.getElementById("nd").textContent = ds.length;
+      // Une ligne par groupe (plat + ses variantes), dans l'ordre du tri
+      const order = [], groups = {};
+      ds.forEach((d) => { const k = groupKey(d); if (!groups[k]) { groups[k] = []; order.push(k); } groups[k].push(d); });
+      document.getElementById("nd").textContent = ds.length + (order.length !== ds.length ? ` · ${order.length} cartes` : "");
       document.getElementById("np").textContent = ps.length;
 
       document.getElementById("dishes").innerHTML = ds.length ? `<table>
         <thead><tr><th></th><th>Plat</th><th>Note</th><th>Valeurs / 100 g</th><th>Validé le</th><th></th></tr></thead><tbody>
-        ${ds.map((d) => `<tr>
+        ${order.map((k) => {
+          const vs = groups[k];
+          if (!vs.some((v) => v.dish_id === selected[k])) selected[k] = vs[0].dish_id;
+          const d = vs.find((v) => v.dish_id === selected[k]);
+          const g = d.group_id ? groupsById[d.group_id] : null;
+          const tabs = g && vs.length > 1 ? `<div class="vtabs" style="margin:6px 0 0">${vs.map((v) =>
+            `<button type="button" class="vtab ${v.dish_id === d.dish_id ? "on" : ""}" data-vgroup="${k}" data-vpick="${v.dish_id}">${esc(v.variant_label || v.name_fr)}</button>`).join("")}</div>` : "";
+          const title = g && vs.length > 1 ? `<b>${esc(g.name_fr)}</b>${g.name_darija ? ` · ${esc(g.name_darija)}` : ""}<br><span>${esc(d.name_fr)}</span>`
+            : `<b>${esc(d.name_fr)}</b>${d.name_darija ? ` · ${esc(d.name_darija)}` : ""}`;
+          return `<tr>
           <td>${/^https:\/\//.test(d.image_url || "") ? `<img class="thumb" src="${esc(d.image_url)}" alt="" loading="lazy">` : `<span class="tag warn">pas d'image</span>`}</td>
-          <td><b>${esc(d.name_fr)}</b>${d.name_darija ? ` · ${esc(d.name_darija)}` : ""}<br><span class="muted">${esc(categoryName(dishCats, d.category))}${d.region ? " · " + esc(d.region) : ""}</span></td>
+          <td>${title}<br><span class="muted">${esc(categoryName(dishCats, d.category))}${d.region ? " · " + esc(d.region) : ""}${vs.length > 1 ? ` · ${vs.length} variantes` : ""}</span>${tabs}</td>
           <td><div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group)}</div><div class="scores">${auditBadges(d.audit_score, d.validated_source)}</div></td>
           <td>${d.energy_kcal_100g ?? "–"} kcal<br><span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"}</span></td>
           <td>${fmtDate(d.validated_at)}</td>
           <td><a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a></td>
-        </tr>`).join("")}</tbody></table>` : `<p class="muted">Aucun plat validé${q ? " pour cette recherche" : ""}.</p>`;
+        </tr>`; }).join("")}</tbody></table>` : `<p class="muted">Aucun plat validé${q ? " pour cette recherche" : ""}.</p>`;
 
       document.getElementById("products").innerHTML = ps.length ? `<table>
         <thead><tr><th></th><th>Produit</th><th>Note</th><th>Valeurs / 100 g</th><th>Validé le</th><th></th></tr></thead><tbody>
@@ -95,12 +110,14 @@
     }
 
     async function load() {
-      const [n, d, p, dc, pc] = await Promise.all([
+      const [n, d, p, dc, pc, gr] = await Promise.all([
         sb.from("dish_nutrition").select("*").eq("status", "valide"),
-        sb.from("dishes").select("id, name_darija, name_ar, category, region, image_url, validated_at, variant_label, audit_score, validated_source").eq("status", "valide"),
+        sb.from("dishes").select("id, name_darija, name_ar, category, region, image_url, validated_at, group_id, variant_label, audit_score, validated_source").eq("status", "valide"),
         sb.from("products").select("id, barcode, name, brand, image_url, energy_kcal, sugars_g, salt_g, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, rating, validated_at, category, audit_score, validated_source").eq("status", "valide"),
         loadCategories("dish"), loadCategories("product"),
+        sb.from("dish_groups").select("id, name_fr, name_ar, name_darija, category"),
       ]);
+      groupsById = Object.fromEntries((gr.data || []).map((g) => [g.id, g]));
       dishCats = dc; productCats = pc;
       const err = n.error || d.error || p.error;
       if (err) { document.getElementById("dishes").innerHTML = `<p class="notice">${esc(err.message)}</p>`; return; }
@@ -118,6 +135,12 @@
       document.getElementById("app").hidden = false;
       document.getElementById("q").addEventListener("input", render);
       document.getElementById("sort").addEventListener("change", render);
+      document.getElementById("dishes").addEventListener("click", (e) => {
+        const t = e.target.closest("button[data-vpick]");
+        if (!t) return;
+        selected[t.dataset.vgroup] = Number(t.dataset.vpick);
+        render();
+      });
       load();
     })();
   </script>
