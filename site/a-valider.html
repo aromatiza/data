@@ -145,18 +145,6 @@
         </div>`;
     }
 
-    async function decideDish(id, action, reason) {
-      const status = action === "valide" ? "valide" : "rejete";
-      const { error } = await sb.from("dishes")
-        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString(),
-          ...(status === "valide" ? { validated_source: "humain" } : {}) })
-        .eq("id", id);
-      if (error) { alert(error.message); return false; }
-      await sb.from("recipes").update({ status }).eq("dish_id", id);
-      await sb.from("review_log").insert({ table_name: "dishes", row_id: id, action: status, reason });
-      return true;
-    }
-
     // ---------- Produits ----------
     async function loadProducts() {
       const { data, error } = await sb.from("products")
@@ -208,17 +196,6 @@
         <tbody>${rows}</tbody></table>`;
     }
 
-    async function decideProduct(id, action, reason) {
-      const status = action === "valide" ? "valide" : "rejete";
-      const { error } = await sb.from("products")
-        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString(),
-          ...(status === "valide" ? { validated_source: "humain" } : {}) })
-        .eq("id", id);
-      if (error) { alert(error.message); return false; }
-      await sb.from("review_log").insert({ table_name: "products", row_id: id, action: status, reason });
-      return true;
-    }
-
     // ---------- Clics ----------
     document.querySelector("main").addEventListener("click", async (e) => {
       // Choix de la variante dans une carte
@@ -229,27 +206,7 @@
         renderDishes();
         return;
       }
-      const btn = e.target.closest("button[data-act]");
-      if (!btn) return;
-      const id = Number(btn.closest("[data-id]").dataset.id);
-      const act = btn.dataset.act;
-      let reason = null;
-      if (act === "rejete") {
-        reason = (prompt("Raison du rejet (obligatoire) :") || "").trim();
-        if (!reason) return;
-      }
-      btn.disabled = true;
-      if (btn.dataset.kind === "dish") {
-        if (await decideDish(id, act, reason)) {
-          const d = dishes.find((x) => x.dish_id === id);
-          dishes = dishes.filter((x) => x.dish_id !== id);
-          if (d && act === "valide" && d.group_id) (siblings[groupKey(d)] ||= []).push({ ...d, status: "valide", _done: true });
-          renderDishes();
-        }
-      } else {
-        if (await decideProduct(id, act, reason)) { products = products.filter((p) => p.id !== id); renderProducts(); }
-      }
-      btn.disabled = false;
+      // La validation se fait uniquement sur la fiche (double audit humain, protocole v2).
     });
 
     (async () => {

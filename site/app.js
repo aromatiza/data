@@ -37,6 +37,7 @@ export function nav(active) {
     ["index.html", "Tableau de bord"],
     ["a-valider.html", "À valider"],
     ["valides.html", "Validés"],
+    ["statistiques.html", "Statistiques audit"],
     ["produits.html", "Produits"],
     ["jury.html", "Preuves (jury)"],
     ["methodologie.html", "Méthodologie"],

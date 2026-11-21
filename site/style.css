@@ -114,3 +114,15 @@ h2.sec { font-size: 18px; color: var(--forest); margin: 28px 0 10px; }
 .timeline { border-left: 3px solid var(--line); margin: 6px 0 0 6px; padding-left: 14px; }
 .timeline div { margin: 0 0 10px; font-size: 14px; }
 @media print { .side, .noprint { display: none !important; } .layout { display: block; } main { padding: 0; } }
+
+/* Protocole v2 : formulaire d'audit et statistiques */
+.panel .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; font-size: 13px; color: var(--muted); }
+.panel .field input, .panel .field textarea, table.chg input { font: inherit; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; width: 100%; color: var(--ink); }
+.panel .field input { max-width: 340px; }
+h3.sub { font-size: 15px; color: var(--forest); margin: 18px 0 4px; }
+table.chg td { padding: 5px 6px; }
+table.chg td:last-child { width: 40px; }
+.bar { height: 10px; border-radius: 99px; background: var(--sand); overflow: hidden; min-width: 120px; }
+.bar > span { display: block; height: 100%; background: var(--forest); }
+.bar.warn > span { background: var(--warn); }
+.kappa { font-size: 13px; color: var(--muted); }
