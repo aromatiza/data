@@ -16,7 +16,7 @@
   <script type="module">
     import { sb, esc, nav, publicNav, wireLogout, optionalMember, nutriBadge, novaBadge, ratingBadge, levelBadge, statusBadge,
       LEVELS, COOKING_METHODS, methodName, RETENTION_GROUPS, MICROS, auditBadges } from "./app.js";
-    import { renderAuditPanel, productChecks } from "./audit.js";
+    import { renderAuditPanel, productChecks, cycleState, ROLE_LABEL } from "./audit.js";
 
     const params = new URLSearchParams(location.search);
     const dishId = Number(params.get("plat")) || null;
@@ -50,19 +50,25 @@
     }
 
     function auditsHtml(ai, human) {
+      // Audit à l'aveugle : tant que le 2e auditeur n'a pas décidé, la décision de l'auditeur 1 reste cachée.
+      const st = cycleState(human);
+      const hidden = new Set(st.open && st.round === 2 ? st.prev.map((a) => a.id) : []);
       const h = human.length ? human.map((a) => {
         const ck = Object.entries(a.checklist || {});
         const ok = ck.filter(([, v]) => v).length;
-        return `<div class="panel" style="margin:8px 0"><b>${esc(DECISION[a.decision] || a.decision)}</b> · ${esc(a.auditor_name || "membre de l'équipe")} · ${fdate(a.created_at)} · protocole ${esc(a.protocol_version)}
-          <br><span class="muted">Checklist : ${ok}/${ck.length} critères cochés${a.double_entry ? ` · double saisie ${a.double_entry.all_match ? "identique ✓" : "avec écarts"}` : ""}</span>
-          ${a.comment ? `<br>${esc(a.comment)}` : ""}</div>`;
+        const chg = Array.isArray(a.changes) ? a.changes : [];
+        return `<div class="panel" style="margin:8px 0"><b>${hidden.has(a.id) ? "Décision cachée jusqu'à l'audit 2" : esc(DECISION[a.decision] || a.decision)}</b> · ${esc(ROLE_LABEL[a.role] || "Auditeur")}${a.cycle ? " (cycle " + a.cycle + ")" : ""} : ${esc(a.auditor_name || "membre de l'équipe")} · ${fdate(a.created_at)} · protocole ${esc(a.protocol_version)}
+          <br><span class="muted">Checklist : ${ok}/${ck.length} critères cochés${a.double_entry ? ` · double saisie ${a.double_entry.all_match ? "identique ✓" : "avec écarts"}` : ""}${chg.length ? ` · ${chg.length} modification(s)` : ""}</span>
+          ${!hidden.has(a.id) && a.comment ? `<br>${esc(a.comment)}` : ""}
+          ${!hidden.has(a.id) && chg.length ? `<div class="tblwrap" style="margin-top:6px"><table><thead><tr><th>Champ</th><th>Avant</th><th>Après</th><th>Source</th></tr></thead><tbody>${chg.map((c) => `<tr><td>${esc(c.field)}</td><td>${esc(c.before)}</td><td>${esc(c.after)}</td><td>${esc(c.source)}</td></tr>`).join("")}</tbody></table></div>` : ""}</div>`;
       }).join("") : `<p class="muted">Pas encore d'audit humain.</p>`;
+      const waiting = st.open ? `<p class="tag ${st.round === 3 ? "warn" : ""}">${st.round === 2 ? "En attente de l'auditeur 2" : "Désaccord : en attente de l'arbitrage"}</p>` : "";
       const i = ai.length ? `<div class="tblwrap"><table><thead><tr><th>Date</th><th>Note</th><th>Verdict</th><th>Problèmes relevés</th><th>Corrections</th></tr></thead><tbody>
         ${ai.map((a) => `<tr><td>${fdate(a.created_at)}</td><td>${a.score ?? "–"}/100</td><td>${esc(VERDICT[a.verdict] || a.verdict)}</td>
           <td>${(Array.isArray(a.issues) ? a.issues : []).map((x) => esc(typeof x === "string" ? x : (x.issue || x.message || JSON.stringify(x)))).join("<br>") || "–"}</td>
           <td>${(Array.isArray(a.changes) ? a.changes : []).map((c) => `${esc(c.table || "")}.${esc(c.column || "")} : ${esc(c.old ?? "")} → ${esc(c.new ?? "")}${c.source_url ? " " + link(c.source_url, "[source]") : ""}`).join("<br>") || "–"}</td></tr>`).join("")}
         </tbody></table></div>` : `<p class="muted">Pas d'audit IA.</p>`;
-      return `<h3 style="font-size:15px">Audit humain (décision finale)</h3>${h}<h3 style="font-size:15px;margin-top:16px">Audits IA (contrôle automatique, ne valide jamais)</h3>${i}`;
+      return `<h3 style="font-size:15px">Audit humain (double audit, décision finale)</h3>${waiting}${h}<h3 style="font-size:15px;margin-top:16px">Audits IA (contrôle automatique, ne valide jamais)</h3>${i}`;
     }
 
     async function teamLog(table, id) {
@@ -161,6 +167,7 @@
         return { l, i, g, m, kc, pr, rC, rB1 };
       });
       const totalK = rows.reduce((a, r) => a + (r.kc || 0), 0);
+      const rawTotal = lines.reduce((a, l) => a + Number(l.grams || 0), 0);
 
       const limits = [];
       if (n?.weight_basis === "non_mesure") limits.push("Poids après cuisson <b>non mesuré</b> : les valeurs pour 100 g sont calculées sur le poids cru (sous-estimées si l'eau s'évapore, sur-estimées si le plat absorbe de l'eau).");
@@ -212,8 +219,8 @@
           <li><b>Contrôle</b> : énergie recalculée par Atwater (4P + 4G + 9L + 2F) : écart ${fmt(n?.atwater_gap_pct)} %.</li>
         </ol>
         <div class="formula">Énergie / 100 g = ${fmt(totalK, 0)} kcal ÷ ${fmt(final, 0)} g × 100 = ${fmt(per100(totalK))} kcal</div>
-        <div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>Texte d'origine</th><th>g crus</th><th>% retenu</th><th>g comptés</th><th>Ingrédient (table)</th><th>Niveau</th><th>Cuisson</th><th>kcal</th><th>Prot. g</th><th>Rétention vit. C / B1</th></tr></thead><tbody>
-          ${rows.map((r) => `<tr><td>${esc(r.l.raw_label)}</td><td>${fmt(r.l.grams)}</td><td>${fmt(r.l.retained_pct ?? 100, 0)} %</td><td>${fmt(r.g)}</td>
+        <div class="tblwrap" style="margin-top:10px"><table><thead><tr><th>Texte d'origine</th><th>g crus</th><th title="Part de l'ingrédient dans le poids cru total : sert à comparer les recettes">% recette</th><th>% retenu</th><th>g comptés</th><th>Ingrédient (table)</th><th>Niveau</th><th>Cuisson</th><th>kcal</th><th>Prot. g</th><th>Rétention vit. C / B1</th></tr></thead><tbody>
+          ${rows.map((r) => `<tr><td>${esc(r.l.raw_label)}</td><td>${fmt(r.l.grams)}</td><td>${fmt(rawTotal ? Number(r.l.grams) / rawTotal * 100 : null, 1)} %</td><td>${fmt(r.l.retained_pct ?? 100, 0)} %</td><td>${fmt(r.g)}</td>
             <td>${r.i ? `${link(r.i.source_url, r.i.name_fr)}<br><span class="muted">${esc(r.i.source)} ${esc(r.i.source_code || "")}${r.i.retention_group ? " · " + esc(RETENTION_GROUPS[r.i.retention_group] || r.i.retention_group) : ""}</span>` : `<span class="tag warn">non relié</span>`}</td>
             <td>${r.i ? levelBadge(r.i.source_level) : ""}</td><td>${esc(methodName(r.m))}</td><td>${fmt(r.kc, 0)}</td><td>${fmt(r.pr, 1)}</td>
             <td>${r.i ? `${r.rC === null ? "?" : fmt(r.rC * 100, 0) + " %"} / ${r.rB1 === null ? "?" : fmt(r.rB1 * 100, 0) + " %"}` : ""}</td></tr>`).join("")}
@@ -316,7 +323,7 @@
 
       if (member && member.role !== "agent" && ["a_valider", "verifie", "draft"].includes(d.status)) {
         renderAuditPanel(document.getElementById("audit-slot"), {
-          kind: "dish", entity: { ...d, dish_id: d.id }, member, onDone: () => setTimeout(() => location.reload(), 900),
+          kind: "dish", entity: { ...d, dish_id: d.id }, member, audits: huQ.data || [], onDone: () => setTimeout(() => location.reload(), 2500),
         });
         if (location.hash === "#audit") document.getElementById("audit")?.scrollIntoView();
       }
@@ -382,7 +389,7 @@
 
       wireEvidenceForm("product", p.id);
       if (member && member.role !== "agent" && ["a_valider", "verifie", "draft"].includes(p.status)) {
-        renderAuditPanel(document.getElementById("audit-slot"), { kind: "product", entity: p, member, onDone: () => setTimeout(() => location.reload(), 900) });
+        renderAuditPanel(document.getElementById("audit-slot"), { kind: "product", entity: p, member, audits: huQ.data || [], onDone: () => setTimeout(() => location.reload(), 2500) });
         if (location.hash === "#audit") document.getElementById("audit")?.scrollIntoView();
       }
     }

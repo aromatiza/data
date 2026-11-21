@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NutriX Data — Statistiques de l'audit</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+</head>
+<body>
+  <div id="app" class="layout" hidden>
+    <div id="side"></div>
+    <main>
+      <h1>Statistiques de l'audit humain</h1>
+      <p class="muted">Calculées automatiquement à partir des audits enregistrés (protocole v2 : double audit, arbitrage en cas de désaccord).
+        Mises à jour à chaque ouverture de la page. <span id="asof"></span></p>
+      <div class="actions noprint" style="margin-bottom:16px">
+        <button id="csv">Exporter les audits (CSV)</button>
+        <button onclick="window.print()">Imprimer / PDF</button>
+      </div>
+
+      <div class="cards" id="cards"></div>
+
+      <h2 class="sec">1. Accord entre les 2 auditeurs</h2>
+      <div id="agreement">Chargement…</div>
+
+      <h2 class="sec">2. Décisions</h2>
+      <div id="decisions"></div>
+
+      <h2 class="sec">3. Critères les plus souvent non conformes</h2>
+      <p class="muted">Part des audits où le critère n'a pas été coché : ce sont les erreurs les plus fréquentes de la collecte.</p>
+      <div id="criteria"></div>
+
+      <h2 class="sec">4. Corrections et double saisie</h2>
+      <div id="changes"></div>
+
+      <h2 class="sec">5. Pesées expérimentales</h2>
+      <div id="weighings"></div>
+
+      <h2 class="sec">6. Par auditeur</h2>
+      <div id="auditors"></div>
+
+      <h2 class="sec">7. Fiches à traiter</h2>
+      <div id="todo"></div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { sb, esc, requireTeamMember, nav, wireLogout } from "./app.js";
+    import { CHECKLISTS, DECISION_LABEL, ROLE_LABEL, cycleState } from "./audit.js";
+
+    const pct = (a, b) => (b ? (a / b * 100) : null);
+    const f1 = (x, d = 1) => (x === null || x === undefined || isNaN(x) ? "–" : Number(x).toFixed(d));
+    const bar = (p, warn) => `<div class="bar ${warn ? "warn" : ""}"><span style="width:${Math.max(0, Math.min(100, p || 0))}%"></span></div>`;
+    const CATS = ["valide", "a_corriger", "rejete"];
+
+    // Kappa de Cohen pour 2 évaluateurs et k catégories
+    function cohenKappa(pairs) {
+      const n = pairs.length;
+      if (!n) return { n: 0, po: null, kappa: null };
+      const agree = pairs.filter(([a, b]) => a === b).length;
+      const po = agree / n;
+      let pe = 0;
+      for (const c of CATS) {
+        const p1 = pairs.filter(([a]) => a === c).length / n;
+        const p2 = pairs.filter(([, b]) => b === c).length / n;
+        pe += p1 * p2;
+      }
+      const kappa = pe === 1 ? null : (po - pe) / (1 - pe);
+      return { n, agree, po, pe, kappa };
+    }
+    // Échelle de Landis et Koch (1977)
+    function kappaLabel(k) {
+      if (k === null) return "non calculable (toutes les décisions identiques)";
+      if (k < 0) return "désaccord";
+      if (k <= 0.20) return "accord faible";
+      if (k <= 0.40) return "accord passable";
+      if (k <= 0.60) return "accord modéré";
+      if (k <= 0.80) return "accord bon";
+      return "accord excellent";
+    }
+
+    function fname(kind, id, names) {
+      const n = names[kind + id] || `#${id}`;
+      return `<a href="fiche.html?${kind === "dish" ? "plat" : "produit"}=${id}#audit">${esc(n)}</a>`;
+    }
+
+    (async () => {
+      const member = await requireTeamMember();
+      if (!member) return;
+      document.getElementById("side").outerHTML = nav("statistiques.html");
+      wireLogout();
+      document.getElementById("app").hidden = false;
+      document.getElementById("asof").textContent = "État au " + new Date().toLocaleString("fr-FR") + ".";
+
+      const [haQ, dQ, pQ, wQ] = await Promise.all([
+        sb.from("human_audits").select("*").order("created_at"),
+        sb.from("dishes").select("id, name_fr, status, validated_source"),
+        sb.from("products").select("id, name, brand, status, validated_source"),
+        sb.from("weighings").select("id, recipe_id, raw_total_g, cooked_total_g, oil_before_g, oil_after_g, performed_by, performed_on"),
+      ]);
+      const err = haQ.error || dQ.error || pQ.error || wQ.error;
+      if (err) { document.querySelector("main").insertAdjacentHTML("beforeend", `<p class="notice">${esc(err.message)}</p>`); return; }
+      const audits = haQ.data || [], dishes = dQ.data || [], products = pQ.data || [], weighings = wQ.data || [];
+      const names = {};
+      dishes.forEach((d) => { names["dish" + d.id] = d.name_fr; });
+      products.forEach((p) => { names["product" + p.id] = `${p.name}${p.brand ? " (" + p.brand + ")" : ""}`; });
+
+      // Regrouper par fiche puis par cycle
+      const byEntity = {};
+      audits.forEach((a) => { (byEntity[a.entity_kind + ":" + a.entity_id] ||= []).push(a); });
+      const cycles = [];                  // { kind, id, cycle, list }
+      Object.entries(byEntity).forEach(([key, list]) => {
+        const [kind, id] = key.split(":");
+        const groups = {};
+        list.forEach((a) => { (groups[a.cycle || 1] ||= []).push(a); });
+        Object.entries(groups).forEach(([c, l]) => cycles.push({ kind, id: Number(id), cycle: Number(c), list: l.sort((x, y) => (x.round || 1) - (y.round || 1)) }));
+      });
+
+      // Paires auditeur 1 / auditeur 2 (2 personnes différentes)
+      const pairsAll = [], pairsBy = { dish: [], product: [] }, ckPairs = [];
+      cycles.forEach((c) => {
+        const a1 = c.list.find((a) => a.round === 1), a2 = c.list.find((a) => a.round === 2);
+        if (!a1 || !a2 || a1.auditor_id === a2.auditor_id) return;
+        pairsAll.push([a1.decision, a2.decision]);
+        pairsBy[c.kind].push([a1.decision, a2.decision]);
+        ckPairs.push({ kind: c.kind, a: a1.checklist || {}, b: a2.checklist || {} });
+      });
+
+      // État de chaque fiche
+      const waiting2 = [], waitingArb = [];
+      Object.entries(byEntity).forEach(([key, list]) => {
+        const [kind, id] = key.split(":");
+        const st = cycleState(list);
+        if (st.open && st.round === 2) waiting2.push([kind, Number(id)]);
+        if (st.open && st.round === 3) waitingArb.push([kind, Number(id)]);
+      });
+      const closedByAudit = new Set(cycles.filter((c) => {
+        const l = c.list;
+        return (l.length === 2 && l[0].decision === "valide" && l[1].decision === "valide") || (l.length >= 3 && l[2].decision === "valide");
+      }).map((c) => c.kind + c.id));
+      const validated = [...dishes.filter((d) => d.status === "valide").map((d) => ["dish", d.id]),
+                         ...products.filter((p) => p.status === "valide").map((p) => ["product", p.id])];
+      const valDouble = validated.filter(([k, id]) => closedByAudit.has(k + id));
+      const valNoTrace = validated.filter(([k, id]) => !closedByAudit.has(k + id));
+      const arbitrations = audits.filter((a) => a.round === 3).length;
+
+      // ---------- Cartes ----------
+      const card = (n, l) => `<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+      document.getElementById("cards").innerHTML =
+        card(audits.length, "Audits humains enregistrés") +
+        card(valDouble.length, "Fiches validées par double audit") +
+        card(waiting2.length, "En attente de l'auditeur 2") +
+        card(waitingArb.length, "En attente d'arbitrage") +
+        card(valNoTrace.length, "Validées sans double audit tracé (à ré-auditer)");
+
+      // ---------- 1. Accord ----------
+      const kA = cohenKappa(pairsAll), kD = cohenKappa(pairsBy.dish), kP = cohenKappa(pairsBy.product);
+      const kRow = (label, k) => `<tr><td>${label}</td><td>${k.n}</td><td>${k.n ? f1(k.po * 100) + " %" : "–"}</td><td><b>${k.kappa === null ? "–" : f1(k.kappa, 2)}</b></td><td>${k.n ? esc(kappaLabel(k.kappa)) : "pas encore de paire"}</td></tr>`;
+      const ckKeys = (kind) => CHECKLISTS[kind].map(([k, t]) => [k, t]);
+      const ckAgree = (kind) => ckKeys(kind).map(([k, t]) => {
+        const l = ckPairs.filter((p) => p.kind === kind && k in p.a && k in p.b);
+        const same = l.filter((p) => p.a[k] === p.b[k]).length;
+        return [t, l.length, pct(same, l.length)];
+      }).filter(([, n]) => n);
+      const ckTable = (kind, title) => {
+        const r = ckAgree(kind);
+        return r.length ? `<h3 class="sub">${title} : accord critère par critère</h3><table><thead><tr><th>Critère</th><th>Paires</th><th>Accord</th><th></th></tr></thead><tbody>
+          ${r.map(([t, n, p]) => `<tr><td>${esc(t)}</td><td>${n}</td><td>${f1(p)} %</td><td>${bar(p, p < 80)}</td></tr>`).join("")}</tbody></table>` : "";
+      };
+      document.getElementById("agreement").innerHTML = `
+        <p class="muted">Pour chaque fiche, la décision de l'auditeur 1 est comparée à celle de l'auditeur 2 (audit à l'aveugle).
+          Le kappa de Cohen corrige l'accord dû au hasard (κ = (accord observé − accord attendu) ÷ (1 − accord attendu)). Interprétation : échelle de Landis et Koch (1977).</p>
+        <table><thead><tr><th></th><th>Paires d'audits</th><th>Accord brut</th><th>Kappa de Cohen</th><th>Interprétation</th></tr></thead><tbody>
+          ${kRow("Toutes les fiches", kA)}${kRow("Plats", kD)}${kRow("Produits", kP)}</tbody></table>
+        ${kA.n && kA.n < 30 ? `<p class="kappa">Moins de 30 paires : le kappa reste peu précis, à interpréter avec prudence.</p>` : ""}
+        ${ckTable("dish", "Plats")}${ckTable("product", "Produits")}`;
+
+      // ---------- 2. Décisions ----------
+      const decRow = (label, list) => {
+        const n = list.length;
+        return `<tr><td>${label}</td><td>${n}</td>${CATS.map((c) => { const k = list.filter((a) => a.decision === c).length; return `<td>${k} <span class="muted">(${f1(pct(k, n), 0)} %)</span></td>`; }).join("")}</tr>`;
+      };
+      document.getElementById("decisions").innerHTML = `<table><thead><tr><th></th><th>Audits</th>${CATS.map((c) => `<th>${DECISION_LABEL[c]}</th>`).join("")}</tr></thead><tbody>
+        ${decRow("Plats", audits.filter((a) => a.entity_kind === "dish"))}
+        ${decRow("Produits", audits.filter((a) => a.entity_kind === "product"))}
+        ${decRow("Total", audits)}</tbody></table>
+        <p class="muted">Arbitrages réalisés : ${arbitrations} · Cycles d'audit : ${cycles.length} · Fiches auditées : ${Object.keys(byEntity).length}</p>`;
+
+      // ---------- 3. Critères ----------
+      const critTable = (kind, title) => {
+        const list = audits.filter((a) => a.entity_kind === kind);
+        if (!list.length) return `<p class="muted">${title} : pas encore d'audit.</p>`;
+        const rows = ckKeys(kind).map(([k, t]) => {
+          const l = list.filter((a) => a.checklist && k in a.checklist);
+          const bad = l.filter((a) => !a.checklist[k]).length;
+          return [t, l.length, bad, pct(bad, l.length)];
+        }).filter(([, n]) => n).sort((a, b) => b[3] - a[3]);
+        return `<h3 class="sub">${title}</h3><table><thead><tr><th>Critère</th><th>Audits</th><th>Non coché</th><th>%</th><th></th></tr></thead><tbody>
+          ${rows.map(([t, n, b, p]) => `<tr><td>${esc(t)}</td><td>${n}</td><td>${b}</td><td>${f1(p, 0)} %</td><td>${bar(p, true)}</td></tr>`).join("")}</tbody></table>`;
+      };
+      document.getElementById("criteria").innerHTML = critTable("dish", "Plats") + critTable("product", "Produits");
+
+      // ---------- 4. Corrections ----------
+      const allChanges = audits.flatMap((a) => (Array.isArray(a.changes) ? a.changes : []).map((c) => ({ ...c, kind: a.entity_kind })));
+      const byField = {};
+      allChanges.forEach((c) => { const k = (c.field || "?").trim(); byField[k] = (byField[k] || 0) + 1; });
+      const top = Object.entries(byField).sort((a, b) => b[1] - a[1]);
+      const de = audits.filter((a) => a.entity_kind === "product" && a.double_entry);
+      const deOk = de.filter((a) => a.double_entry.all_match).length;
+      const auditsWithChange = audits.filter((a) => Array.isArray(a.changes) && a.changes.length).length;
+      document.getElementById("changes").innerHTML = `
+        <dl class="kv"><dt>Modifications notées</dt><dd>${allChanges.length} (dans ${auditsWithChange} audit(s) sur ${audits.length} · ${f1(pct(auditsWithChange, audits.length), 0)} %)</dd>
+          <dt>Double saisie identique (produits)</dt><dd>${deOk} / ${de.length} ${de.length ? `(${f1(pct(deOk, de.length), 0)} %)` : ""}</dd></dl>
+        ${top.length ? `<h3 class="sub">Champs les plus corrigés</h3><table><thead><tr><th>Champ</th><th>Corrections</th><th></th></tr></thead><tbody>
+          ${top.map(([k, n]) => `<tr><td>${esc(k)}</td><td>${n}</td><td>${bar(pct(n, top[0][1]))}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">Pas encore de modification notée.</p>`}`;
+
+      // ---------- 5. Pesées ----------
+      const ys = weighings.map((w) => w.cooked_total_g / (Number(w.raw_total_g) + Math.max(0, Number(w.oil_before_g || 0) - Number(w.oil_after_g || 0)))).filter((x) => isFinite(x));
+      const mean = ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : null;
+      const sd = ys.length > 1 ? Math.sqrt(ys.reduce((a, b) => a + (b - mean) ** 2, 0) / (ys.length - 1)) : null;
+      const recipesWeighed = new Set(weighings.map((w) => w.recipe_id)).size;
+      document.getElementById("weighings").innerHTML = `<dl class="kv">
+        <dt>Pesées enregistrées</dt><dd>${weighings.length}</dd>
+        <dt>Recettes pesées</dt><dd>${recipesWeighed} sur ${dishes.length} plats</dd>
+        <dt>Rendement moyen (cuit ÷ cru)</dt><dd>${mean === null ? "–" : f1(mean * 100) + " %"}${sd === null ? "" : ` · écart-type ${f1(sd * 100)} %`}</dd></dl>
+        ${weighings.length ? "" : `<p class="muted">Aucune pesée : tous les plats sont encore calculés sur le poids cru. Ajoutez des pesées depuis la fiche du plat.</p>`}`;
+
+      // ---------- 6. Par auditeur ----------
+      const byAud = {};
+      audits.forEach((a) => {
+        const k = a.auditor_name || a.auditor_id || "?";
+        const o = (byAud[k] ||= { n: 0, valide: 0, a_corriger: 0, rejete: 0, arb: 0, changes: 0, last: null });
+        o.n++; o[a.decision]++; if (a.round === 3) o.arb++;
+        o.changes += Array.isArray(a.changes) ? a.changes.length : 0;
+        o.last = a.created_at;
+      });
+      const audRows = Object.entries(byAud).sort((a, b) => b[1].n - a[1].n);
+      document.getElementById("auditors").innerHTML = audRows.length ? `<table><thead><tr><th>Auditeur</th><th>Audits</th><th>Validé</th><th>À corriger</th><th>Rejeté</th><th>Arbitrages</th><th>Modifications</th><th>Dernier audit</th></tr></thead><tbody>
+        ${audRows.map(([k, o]) => `<tr><td>${esc(k)}</td><td>${o.n}</td><td>${o.valide}</td><td>${o.a_corriger}</td><td>${o.rejete}</td><td>${o.arb}</td><td>${o.changes}</td><td>${new Date(o.last).toLocaleDateString("fr-FR")}</td></tr>`).join("")}</tbody></table>`
+        : `<p class="muted">Pas encore d'audit.</p>`;
+
+      // ---------- 7. À traiter ----------
+      const list = (arr) => arr.length ? `<ul>${arr.map(([k, id]) => `<li>${k === "dish" ? "Plat" : "Produit"} : ${fname(k, id, names)}</li>`).join("")}</ul>` : `<p class="muted">Aucune.</p>`;
+      document.getElementById("todo").innerHTML = `
+        <h3 class="sub">En attente de l'auditeur 2 (${waiting2.length})</h3>${list(waiting2)}
+        <h3 class="sub">En attente d'arbitrage (${waitingArb.length})</h3>${list(waitingArb)}
+        <h3 class="sub">Validées sans double audit tracé (${valNoTrace.length})</h3>
+        <p class="muted">Validées avant le protocole v2 : refaire le double audit pour avoir une preuve complète.</p>${list(valNoTrace)}`;
+
+      // ---------- Export CSV ----------
+      document.getElementById("csv").onclick = () => {
+        const cols = ["id", "entity_kind", "entity_id", "nom", "cycle", "round", "role", "decision", "auditor_name", "created_at", "protocol_version", "criteres_non_coches", "double_saisie_identique", "nb_modifications", "comment"];
+        const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+        const lines = audits.map((a) => [a.id, a.entity_kind, a.entity_id, names[a.entity_kind + a.entity_id] || "", a.cycle, a.round, ROLE_LABEL[a.role] || "", a.decision, a.auditor_name, a.created_at, a.protocol_version,
+          Object.entries(a.checklist || {}).filter(([, v]) => !v).map(([k]) => k).join(" "), a.double_entry ? a.double_entry.all_match : "",
+          Array.isArray(a.changes) ? a.changes.length : 0, a.comment].map(q).join(","));
+        const blob = new Blob(["﻿" + [cols.join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        Object.assign(document.createElement("a"), { href: url, download: `audits-nutrix-${new Date().toISOString().slice(0, 10)}.csv` }).click();
+        URL.revokeObjectURL(url);
+      };
+    })();
+  </script>
+</body>
+</html>
