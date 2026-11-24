@@ -182,3 +182,54 @@ h2.sec { font-size: 17px; color: var(--ink); margin: 34px 0 10px; padding-top: 6
 @media (max-width: 640px) { .qitem { grid-template-columns: 48px 1fr; } .qitem img, .qitem .noimg { width: 48px; height: 48px; } .qitem .actions { grid-column: 1 / -1; } }
 
 @media print { .side, .noprint, .audit-side { display: none !important; } .layout, .audit-layout { display: block; } main { padding: 0; } }
+
+/* ---------- Couleurs v2 : plus de vert forêt, sable chaud, violet en accent ---------- */
+body { background: var(--sand); }
+.side { background: var(--forest); border-right: none; }
+.side .brand { color: #fff; }
+.side .brand::before { background: #b794ff; }
+.side a { color: #dfeae3; }
+.side a:hover { background: rgba(255,255,255,.08); }
+.side a.on { background: var(--paper); color: var(--forest); }
+.side button.link { color: #b9cdc1; }
+.side .muted { color: #b9cdc1 !important; }
+main { background: transparent; }
+h1 { color: var(--forest); }
+h1::after { content: ""; display: block; width: 44px; height: 4px; border-radius: 99px; background: var(--purple); margin-top: 8px; }
+.card { border: none; box-shadow: 0 1px 0 var(--line); position: relative; overflow: hidden; }
+.card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--forest); }
+.card.hl { background: var(--forest); }
+.card.hl::before { background: #b794ff; }
+.card.hl .n { color: #fff; }
+.card.hl .l { color: #dfeae3; }
+a.card.hl:hover { background: #255c45; }
+table { border: none; box-shadow: 0 1px 0 var(--line); }
+th { background: var(--forest-soft); color: var(--forest); }
+tr:hover td { background: #fdfcf8; }
+button.primary { background: var(--forest); }
+button.primary:hover { background: #255c45; }
+button.accent:hover { background: #f4eefe; }
+.panel, .flags, .qitem, .vcard { border-color: transparent; box-shadow: 0 1px 0 var(--line), 0 6px 18px rgba(31,77,58,.05); }
+.panel h2, .audit-side h2 { color: var(--forest); }
+h2.sec { color: var(--forest); border-bottom: 2px solid var(--line); padding-bottom: 6px; }
+.flags { border-left: 4px solid var(--warn); }
+.flags.clean { border-left-color: var(--ok); }
+.toc a { background: var(--paper); border-color: transparent; }
+.toc a:hover { background: var(--forest); color: #fff; }
+.qtabs { border-bottom-color: #ddd3bd; }
+.qtabs button.on { color: var(--forest); border-bottom-color: var(--purple); }
+.qtabs button.on span { background: var(--purple); color: #fff; }
+.qitem { border-left: 4px solid #d8cdb3; }
+.qitem.is-ver { border-left-color: var(--purple); }
+.qitem.is-clean { border-left-color: var(--ok); }
+.qitem.is-warn { border-left-color: var(--warn); }
+.qitem:hover { border-color: transparent; border-left-color: inherit; transform: translateY(-1px); transition: transform .12s; }
+.catbtn { border-color: transparent; background: var(--paper); }
+.catbtn.on { background: var(--purple); border-color: var(--purple); }
+.progress { background: var(--forest-soft); }
+.progress > i { background: linear-gradient(90deg, var(--forest), var(--purple)); }
+.audit-side .panel { border-top: 4px solid var(--purple); }
+.checklist label:has(input:checked) b { color: var(--ok); }
+.checklist input { accent-color: var(--forest); }
+.login { border: none; border-top: 5px solid var(--forest); box-shadow: 0 10px 30px rgba(31,77,58,.10); }
+@media (max-width: 760px) { .side a.on { background: var(--paper); } }

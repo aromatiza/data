@@ -123,7 +123,7 @@
 
     function dishItem(d) {
       const sub = [groups[d.group_id] && d.variant_label ? `${groups[d.group_id]} · ${d.variant_label}` : "", d.name_darija, categoryName(cats.dish, d.category), d.region].filter(Boolean).filter((v, i, arr) => arr.indexOf(v) === i).map(esc).join(" · ");
-      return `<div class="qitem">
+      return `<div class="qitem ${d.status === "verifie" ? "is-ver" : d._flags.length ? "is-warn" : "is-clean"}">
         ${img(d.image_url, d.name_fr)}
         <div>
           <div class="t">${esc(d.name_fr)} ${statusBadge(d.status, d.worst_source_level)}</div>
@@ -141,7 +141,7 @@
     }
 
     function productItem(p) {
-      return `<div class="qitem">
+      return `<div class="qitem ${p.status === "verifie" ? "is-ver" : p._flags.length ? "is-warn" : "is-clean"}">
         ${img(p.image_url, p.name)}
         <div>
           <div class="t">${esc(p.name)} ${statusBadge(p.status, p.source_level)}</div>
