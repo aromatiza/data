@@ -11,260 +11,184 @@
   <div id="app" class="layout" hidden>
     <div id="side"></div>
     <main>
-      <h1>Plats à valider</h1>
-      <p class="muted">Protocole v1 : l'IA ne valide jamais. Ouvre la <b>fiche</b> (preuves + calcul détaillé), fais l'<b>audit humain</b> (checklist) : c'est la seule façon de valider.
-        <span class="st st-ver">Vérifié (audit IA)</span> = l'audit IA n'a trouvé aucun problème bloquant, à auditer en priorité.</p>
-      <div id="dish-cats" class="catbar"></div>
-      <div id="dishes">Chargement…</div>
+      <h1>File d'audit</h1>
+      <p class="lead">Ouvre un élément, contrôle les points signalés, coche la checklist, décide. Le bouton « Suivant » t'emmène directement à l'élément d'après.
+        Les éléments <span class="st st-ver">Vérifié (audit IA)</span> sont en tête : l'IA n'y a trouvé aucun problème bloquant, mais seule ta décision les valide.</p>
 
-      <h1 style="margin-top:34px">Produits à valider</h1>
-      <p class="muted">Audit humain d'un produit = double saisie des valeurs depuis la photo de l'étiquette + checklist. Après validation, le produit passe au niveau S2.</p>
-      <div id="product-cats" class="catbar"></div>
-      <div id="products">Chargement…</div>
+      <div class="qtabs" role="tablist">
+        <button type="button" data-tab="dish" class="on">Plats <span id="n-dish">…</span></button>
+        <button type="button" data-tab="product">Produits <span id="n-product">…</span></button>
+      </div>
+
+      <div class="actions" style="margin-bottom:10px">
+        <button type="button" class="primary" id="start">Commencer l'audit</button>
+        <label class="muted"><input type="checkbox" id="only-clean"> Seulement sans alerte</label>
+      </div>
+      <div id="cats" class="catbar"></div>
+      <div id="list">Chargement…</div>
     </main>
   </div>
 
   <script type="module">
-    import { sb, esc, requireTeamMember, nav, wireLogout, nutriBadge, novaBadge, ratingBadge,
-      loadCategories, categoryName, renderCategoryBar, matchCategory, auditBadges, statusBadge, levelBadge } from "./app.js";
+    import { sb, esc, requireTeamMember, nav, wireLogout, loadCategories, categoryName, renderCategoryBar, matchCategory,
+      statusBadge, levelBadge, nutriBadge, novaBadge, ratingBadge } from "./app.js";
+    import { productChecks } from "./audit.js";
 
-    let member = null;
-    let dishCats = [], productCats = [];
-    let dishes = [];          // variantes à valider (dish_nutrition + infos de dishes)
-    let groupsById = {};      // dish_groups
-    let siblings = {};        // clé de groupe -> variantes déjà validées du même groupe (lecture seule)
-    let products = [];
-    const dishState = { cat: "" }, productState = { cat: "" };
-    const selected = {};      // clé de groupe -> id de la variante choisie
+    let tab = "dish";
+    let cats = { dish: [], product: [] };
+    const data = { dish: [], product: [] };
+    const state = { dish: { cat: "" }, product: { cat: "" } };
+    const groups = {};
 
-    function gap(pct, label) {
-      if (pct === null || pct === undefined) return "";
-      const bad = Number(pct) > 15;
-      return `<span class="tag ${bad ? "warn" : "ok"}">${label} ${Number(pct).toFixed(1)} %</span>`;
-    }
-    const groupKey = (d) => d.group_id ? "g" + d.group_id : "d" + d.dish_id;
+    const num = (x) => (x === null || x === undefined || x === "" || isNaN(Number(x))) ? null : Number(x);
+    const img = (url, alt) => /^https:\/\//.test(url || "") ? `<img src="${esc(url)}" alt="${esc(alt)}" loading="lazy">` : `<span class="noimg" title="pas d'image"></span>`;
 
-    // ---------- Plats ----------
-    async function loadDishes() {
-      const box = document.getElementById("dishes");
-      const { data, error } = await sb.from("dish_nutrition")
-        .select("*").in("status", ["a_valider", "verifie"]).order("name_fr");
-      if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
-
-      const ids = data.map((d) => d.dish_id);
-      const { data: extra, error: e2 } = ids.length ? await sb.from("dishes")
-        .select("id, name_ar, name_darija, category, region, confidence, image_url, image_credit, group_id, variant_label, audit_score, validated_source, recipes(sources, version)")
-        .in("id", ids) : { data: [] };
-      if (e2) { box.innerHTML = `<p class="notice">${esc(e2.message)}</p>`; return; }
-      const byId = Object.fromEntries((extra || []).map((x) => [x.id, x]));
-      dishes = data.map((d) => ({ ...d, ...(byId[d.dish_id] || {}) }));
-
-      const gids = [...new Set(dishes.map((d) => d.group_id).filter(Boolean))];
-      groupsById = {};
-      if (gids.length) {
-        const { data: groups } = await sb.from("dish_groups")
-          .select("id, name_fr, name_ar, name_darija, category").in("id", gids);
-        (groups || []).forEach((g) => { groupsById[g.id] = g; });
-        // Variantes déjà validées des mêmes groupes : affichées comme boutons ✓ dans la carte
-        const [sn, sd] = await Promise.all([
-          sb.from("dish_nutrition").select("*").eq("status", "valide"),
-          sb.from("dishes").select("id, name_ar, name_darija, category, region, confidence, image_url, image_credit, group_id, variant_label, audit_score, validated_source, recipes(sources, version)")
-            .in("group_id", gids).eq("status", "valide"),
-        ]);
-        siblings = {};
-        if (!sn.error && !sd.error) {
-          const sById = Object.fromEntries((sd.data || []).map((x) => [x.id, x]));
-          (sn.data || []).filter((x) => sById[x.dish_id]).forEach((x) => {
-            const v = { ...x, ...sById[x.dish_id], _done: true };
-            (siblings[groupKey(v)] ||= []).push(v);
-          });
-        }
-      }
-      renderDishes();
-    }
-
-    function renderDishes() {
-      renderCategoryBar(document.getElementById("dish-cats"), dishCats, dishes, (d) => d.category, dishState, renderDishes);
-      const box = document.getElementById("dishes");
-      const list = dishes.filter((d) => matchCategory(dishState, d.category));
-      if (!list.length) { box.innerHTML = `<p class="muted">Rien à valider${dishState.cat ? " dans cette catégorie" : ""}.</p>`; return; }
-
-      // Regroupe les variantes : une carte par dish_groups (ou par plat seul)
-      const order = [], groups = {};
-      list.forEach((d) => {
-        const k = groupKey(d);
-        if (!groups[k]) { groups[k] = []; order.push(k); }
-        groups[k].push(d);
-      });
-      box.innerHTML = `<div class="vcards">${order.map((k) => cardHtml(k, groups[k], siblings[k] || [])).join("")}</div>`;
-    }
-
-    function cardHtml(key, pending, done = []) {
-      const variants = pending.concat(done);
-      if (!variants.some((v) => v.dish_id === selected[key])) selected[key] = pending[0].dish_id;
-      const first = pending[0];
-      const g = first.group_id ? groupsById[first.group_id] : null;
-      const title = g?.name_fr || first.name_fr;
-      const darija = g ? g.name_darija : first.name_darija;
-      const ar = g ? g.name_ar : first.name_ar;
-      const cat = categoryName(dishCats, g?.category || first.category);
-      const tabs = first.group_id ? `<div class="vtabs">${variants.map((v) =>
-        `<button type="button" class="vtab ${v.dish_id === selected[key] ? "on" : ""}" data-pick="${v.dish_id}" title="${v._done ? "Déjà validé" : "À valider"}">${v._done ? "✓ " : ""}${esc(v.variant_label || v.name_fr)}</button>`
-      ).join("")}</div>` : "";
-      return `<article class="vcard" data-group="${esc(key)}">
-        <div class="vhead"><b>${esc(title)}</b>${darija ? ` <span>· ${esc(darija)}</span>` : ""}${ar ? ` <span>· ${esc(ar)}</span>` : ""}
-          <span class="tag">${esc(cat)}</span>${first.group_id ? ` <span class="muted">${pending.length} à valider${done.length ? ` · ${done.length} déjà validée(s) ✓` : ""}</span>` : ""}</div>
-        ${tabs}
-        <div class="vbody">${variantBody(variants.find((v) => v.dish_id === selected[key]))}</div>
-      </article>`;
-    }
-
-    function variantBody(d) {
+    // Alertes visibles d'un coup d'œil (aide à l'audit, pas une décision)
+    function dishFlags(d) {
+      const f = [];
       const rec = (d.recipes || []).slice().sort((a, b) => b.version - a.version)[0];
-      const srcs = (rec?.sources || []).filter((s) => /^https?:\/\//.test(s.url || ""))
-        .map((s, i) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">[${i + 1}] ${esc(s.title || "source")}</a>`).join("<br>");
-      const img = /^https:\/\//.test(d.image_url || "")
-        ? `<img src="${esc(d.image_url)}" alt="${esc(d.name_fr)}" loading="lazy"><span class="muted" style="font-size:11px">${esc(d.image_credit || "")}</span>`
-        : `<span class="tag warn">pas d'image</span>`;
-      const conf = d.confidence ? `<span class="tag ${d.confidence === "haute" ? "ok" : "warn"}">confiance ${esc(d.confidence)}</span>` : "";
-      return `
-        <div>${img}</div>
-        <div><b>${esc(d.name_fr)}</b><br>
-          <span class="muted">${d.n_ingredients} ingrédients${d.region ? " · " + esc(d.region) : ""}${d.portion_g ? " · portion " + esc(d.portion_g) + " g" : ""}</span> ${conf}
-          ${srcs ? `<div class="muted" style="font-size:12px;margin-top:4px">${srcs}</div>` : `<br><span class="tag warn">aucune source</span>`}
-          <div class="scores">${statusBadge(d.status, d.worst_source_level)} ${levelBadge(d.worst_source_level)} ${auditBadges(d.audit_score, d.validated_source)}</div></div>
-        <div>${d.energy_kcal_100g ?? "–"} kcal / 100 g<br>
-          <span class="muted">P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"} (g/100 g)</span>
-          <div class="scores">${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group, d.nova_is_manual ? "(choisi à la main)" : "(estimé)")}</div>
-          <div class="scores">${gap(d.atwater_gap_pct, "Atwater")} ${gap(d.tmca_gap_pct, "TMCA")}
-          ${d.n_unlinked > 0 ? `<span class="tag warn">${d.n_unlinked} ingrédient(s) non relié(s)</span>` : ""}</div></div>
-        <div class="actions" data-id="${d.dish_id}">
-          <a href="modifier.html?plat=${d.dish_id}"><button type="button" class="accent">Modifier</button></a>
-          ${d._done ? `<span class="tag ok">Déjà validé</span> <a href="fiche.html?plat=${d.dish_id}"><button type="button">Fiche</button></a>` : `
-          <a href="fiche.html?plat=${d.dish_id}#audit"><button type="button" class="primary">Fiche + audit humain</button></a>`}
-        </div>`;
+      const nSrc = (rec?.sources || []).filter((s) => /^https?:\/\//.test(s.url || "")).length;
+      if (nSrc < 3) f.push(nSrc ? `${nSrc} source(s) sur 3 min.` : "Aucune source");
+      if (num(d.atwater_gap_pct) > 10) f.push(`Écart Atwater ${num(d.atwater_gap_pct).toFixed(1)} %`);
+      if (num(d.tmca_gap_pct) > 15) f.push(`Écart TMCA ${num(d.tmca_gap_pct).toFixed(1)} %`);
+      if (num(d.n_unlinked) > 0) f.push(`${d.n_unlinked} ingrédient(s) non relié(s)`);
+      if (num(d.n_method_missing) > 0) f.push(`${d.n_method_missing} cuisson(s) non précisée(s)`);
+      if (d.weight_basis === "non_mesure") f.push("Poids cuit non sourcé");
+      if (num(d.worst_source_level) >= 4) f.push("Source faible (S4–S5)");
+      if (!d.portion_g) f.push("Portion manquante");
+      if (!/^https:\/\//.test(d.image_url || "")) f.push("Pas d'image");
+      return f;
+    }
+    function productFlags(p) {
+      const f = productChecks(p).filter(([ok]) => !ok).map(([, t]) => t);
+      if (p.values_source === "photo_etiquette_ia") f.push("Valeurs lues par l'IA");
+      if (p.nova_source === "estimation_ia") f.push("NOVA estimé par l'IA");
+      if (p.scores_source === "calcul") f.push("Nutri-Score calculé");
+      return f;
     }
 
-    async function decideDish(id, action, reason) {
-      const status = action === "valide" ? "valide" : "rejete";
-      const { error } = await sb.from("dishes")
-        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString(),
-          ...(status === "valide" ? { validated_source: "humain" } : {}) })
-        .eq("id", id);
-      if (error) { alert(error.message); return false; }
-      await sb.from("recipes").update({ status }).eq("dish_id", id);
-      await sb.from("review_log").insert({ table_name: "dishes", row_id: id, action: status, reason });
-      return true;
+    async function loadDishes() {
+      const { data: rows, error } = await sb.from("dish_nutrition").select("*").in("status", ["a_valider", "verifie"]);
+      if (error) throw error;
+      const ids = rows.map((d) => d.dish_id);
+      const { data: extra, error: e2 } = ids.length ? await sb.from("dishes")
+        .select("id, name_ar, name_darija, category, region, confidence, image_url, group_id, variant_label, audit_score, portion_g, recipes(sources, version)")
+        .in("id", ids) : { data: [] };
+      if (e2) throw e2;
+      const byId = Object.fromEntries((extra || []).map((x) => [x.id, x]));
+      data.dish = rows.map((d) => ({ ...byId[d.dish_id], ...d, portion_g: d.portion_g ?? byId[d.dish_id]?.portion_g }));
+      const gids = [...new Set(data.dish.map((d) => d.group_id).filter(Boolean))];
+      if (gids.length) {
+        const { data: g } = await sb.from("dish_groups").select("id, name_fr").in("id", gids);
+        (g || []).forEach((x) => { groups[x.id] = x.name_fr; });
+      }
+      data.dish.forEach((d) => { d._id = d.dish_id; d._flags = dishFlags(d); });
     }
 
-    // ---------- Produits ----------
     async function loadProducts() {
-      const { data, error } = await sb.from("products")
-        .select("id, name, brand, barcode, category, status, source_level, source, source_url, energy_kcal, sugars_g, salt_g, ingredients_text, image_url, image_credit, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, values_source, rating, audit_score, validated_source, product_additives(additives(e_code, name_fr))")
-        .in("status", ["a_valider", "verifie"]).order("created_at", { ascending: false });
-      const box = document.getElementById("products");
-      if (error) { box.innerHTML = `<p class="notice">${esc(error.message)}</p>`; return; }
-      products = data;
-      renderProducts();
+      const { data: rows, error } = await sb.from("products")
+        .select("id, name, brand, barcode, category, status, source_level, image_url, energy_kcal, fat_g, sat_fat_g, carbs_g, sugars_g, fiber_g, protein_g, salt_g, nutriscore_grade, nutriscore_score, nova_group, scores_source, nova_source, values_source, rating, audit_score")
+        .in("status", ["a_valider", "verifie"]);
+      if (error) throw error;
+      data.product = rows.map((p) => ({ ...p, _id: p.id, _flags: productFlags(p) }));
     }
 
-    function renderProducts() {
-      renderCategoryBar(document.getElementById("product-cats"), productCats, products, (p) => p.category, productState, renderProducts);
-      const box = document.getElementById("products");
-      const list = products.filter((p) => matchCategory(productState, p.category));
-      if (!list.length) { box.innerHTML = `<p class="muted">Rien à valider${productState.cat ? " dans cette catégorie" : ""}.</p>`; return; }
+    // Tri : vérifié par l'IA d'abord, puis le moins d'alertes, puis par nom
+    const sorted = (list, name) => list.slice().sort((a, b) =>
+      (b.status === "verifie") - (a.status === "verifie") || a._flags.length - b._flags.length || String(name(a)).localeCompare(String(name(b)), "fr"));
 
-      const rows = list.map((p) => {
-        const add = (p.product_additives || []).map((x) => x.additives)
-          .filter(Boolean).map((a) => esc(a.e_code || a.name_fr)).join(", ") || "aucun";
-        const srcLabel = p.source === "OpenFoodFacts" ? "Open Food Facts (ODbL)" : "Étiquette";
-        const src = /^https?:\/\//.test(p.source_url || "")
-          ? `<a class="muted" href="${esc(p.source_url)}" target="_blank" rel="noopener">${srcLabel}</a>`
-          : `<span class="muted">${srcLabel}</span>`;
-        const img = /^https:\/\//.test(p.image_url || "")
-          ? `<img src="${esc(p.image_url)}" alt="${esc(p.name)}" loading="lazy" style="width:90px;height:90px;object-fit:contain;border-radius:10px;background:#fff;display:block">`
-          : `<span class="tag warn">pas d'image</span>`;
-        return `
-          <tr data-id="${p.id}">
-            <td>${img}</td>
-            <td><b>${esc(p.name)}</b><br><span class="muted">${esc(p.brand || "")} · ${esc(p.barcode)}</span><br>
-              <span class="tag">${esc(categoryName(productCats, p.category))}</span>
-              <div class="scores">${statusBadge(p.status, p.source_level)} ${levelBadge(p.source_level)} ${auditBadges(p.audit_score, p.validated_source)}</div></td>
-            <td>${p.energy_kcal ?? "–"} kcal · sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g<br>${src}
-              <div class="scores">${ratingBadge(p.rating)} ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}
-              ${p.scores_source === "calcul" ? `<span class="tag warn" title="Calcul NutriX (algorithme général) : à vérifier sur Open Food Facts">estimé</span>` : ""}
-              ${p.nova_source === "estimation_ia" ? `<span class="tag warn" title="NOVA estimé par l'IA depuis la liste d'ingrédients">NOVA IA</span>` : ""}
-              ${p.values_source === "photo_etiquette_ia" ? `<span class="tag warn" title="Valeurs lues par l'IA sur la photo de l'étiquette">valeurs IA</span>` : ""}</div></td>
-            <td>${add}</td>
-            <td class="actions" data-id="${p.id}">
-              <a href="modifier.html?produit=${p.id}"><button type="button" class="accent">Modifier</button></a>
-              <a href="fiche.html?produit=${p.id}#audit"><button type="button" class="primary">Fiche + audit humain</button></a>
-            </td>
-          </tr>`;
-      }).join("");
-
-      box.innerHTML = `<table>
-        <thead><tr><th>Image</th><th>Produit</th><th>Valeurs / 100 g</th><th>Additifs</th><th>Action</th></tr></thead>
-        <tbody>${rows}</tbody></table>`;
+    function visible() {
+      const only = document.getElementById("only-clean").checked;
+      const name = tab === "dish" ? (d) => d.name_fr : (p) => p.name;
+      return sorted(data[tab].filter((x) => matchCategory(state[tab], x.category) && (!only || !x._flags.length)), name);
     }
 
-    async function decideProduct(id, action, reason) {
-      const status = action === "valide" ? "valide" : "rejete";
-      const { error } = await sb.from("products")
-        .update({ status, validated_by: member.user.id, validated_at: new Date().toISOString(),
-          ...(status === "valide" ? { validated_source: "humain" } : {}) })
-        .eq("id", id);
-      if (error) { alert(error.message); return false; }
-      await sb.from("review_log").insert({ table_name: "products", row_id: id, action: status, reason });
-      return true;
+    function render() {
+      document.getElementById("n-dish").textContent = data.dish.length;
+      document.getElementById("n-product").textContent = data.product.length;
+      document.querySelectorAll(".qtabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
+      renderCategoryBar(document.getElementById("cats"), cats[tab], data[tab], (x) => x.category, state[tab], render);
+      const list = visible();
+      const box = document.getElementById("list");
+      document.getElementById("start").disabled = !list.length;
+      if (!list.length) { box.innerHTML = `<p class="muted">Rien à auditer ici. Bravo.</p>`; return; }
+      box.innerHTML = list.map(tab === "dish" ? dishItem : productItem).join("");
     }
 
-    // ---------- Clics ----------
-    document.querySelector("main").addEventListener("click", async (e) => {
-      // Choix de la variante dans une carte
-      const tab = e.target.closest("button[data-pick]");
-      if (tab) {
-        const card = tab.closest(".vcard");
-        selected[card.dataset.group] = Number(tab.dataset.pick);
-        renderDishes();
-        return;
-      }
-      const btn = e.target.closest("button[data-act]");
-      if (!btn) return;
-      const id = Number(btn.closest("[data-id]").dataset.id);
-      const act = btn.dataset.act;
-      let reason = null;
-      if (act === "rejete") {
-        reason = (prompt("Raison du rejet (obligatoire) :") || "").trim();
-        if (!reason) return;
-      }
-      btn.disabled = true;
-      if (btn.dataset.kind === "dish") {
-        if (await decideDish(id, act, reason)) {
-          const d = dishes.find((x) => x.dish_id === id);
-          dishes = dishes.filter((x) => x.dish_id !== id);
-          if (d && act === "valide" && d.group_id) (siblings[groupKey(d)] ||= []).push({ ...d, status: "valide", _done: true });
-          renderDishes();
-        }
-      } else {
-        if (await decideProduct(id, act, reason)) { products = products.filter((p) => p.id !== id); renderProducts(); }
-      }
-      btn.disabled = false;
+    function chips(flags) {
+      return flags.length
+        ? flags.slice(0, 4).map((t) => `<span class="tag warn">${esc(t)}</span>`).join("") + (flags.length > 4 ? `<span class="tag warn">+${flags.length - 4}</span>` : "")
+        : `<span class="tag ok">Aucune alerte</span>`;
+    }
+
+    function dishItem(d) {
+      const sub = [groups[d.group_id] && d.variant_label ? `${groups[d.group_id]} · ${d.variant_label}` : "", d.name_darija, categoryName(cats.dish, d.category), d.region].filter(Boolean).filter((v, i, arr) => arr.indexOf(v) === i).map(esc).join(" · ");
+      return `<div class="qitem">
+        ${img(d.image_url, d.name_fr)}
+        <div>
+          <div class="t">${esc(d.name_fr)} ${statusBadge(d.status, d.worst_source_level)}</div>
+          <div class="sub">${sub}</div>
+          <div class="chips">${chips(d._flags)}</div>
+          <details><summary>Valeurs et scores</summary>
+            <div class="sub">${d.energy_kcal_100g ?? "–"} kcal · P ${d.protein_g_100g ?? "–"} · G ${d.carbs_g_100g ?? "–"} · L ${d.fat_g_100g ?? "–"} g / 100 g · ${d.n_ingredients ?? "?"} ingrédients</div>
+            <div class="scores">${levelBadge(d.worst_source_level)} ${ratingBadge(d.rating)} ${nutriBadge(d.nutriscore_grade, d.nutriscore_score ?? "")} ${novaBadge(d.nova_group)}${d.audit_score != null ? ` <span class="audit">Audit IA ${d.audit_score}<small>/100</small></span>` : ""}</div>
+          </details>
+        </div>
+        <div class="actions">
+          <a href="modifier.html?plat=${d.dish_id}"><button type="button">Modifier</button></a>
+          <button type="button" class="primary" data-open="${d.dish_id}">Auditer</button>
+        </div></div>`;
+    }
+
+    function productItem(p) {
+      return `<div class="qitem">
+        ${img(p.image_url, p.name)}
+        <div>
+          <div class="t">${esc(p.name)} ${statusBadge(p.status, p.source_level)}</div>
+          <div class="sub">${[p.brand, p.barcode, categoryName(cats.product, p.category)].filter(Boolean).map(esc).join(" · ")}</div>
+          <div class="chips">${chips(p._flags)}</div>
+          <details><summary>Valeurs et scores</summary>
+            <div class="sub">${p.energy_kcal ?? "–"} kcal · sucres ${p.sugars_g ?? "–"} g · sel ${p.salt_g ?? "–"} g / 100 g</div>
+            <div class="scores">${levelBadge(p.source_level)} ${ratingBadge(p.rating)} ${nutriBadge(p.nutriscore_grade, p.nutriscore_score ?? "")} ${novaBadge(p.nova_group)}${p.audit_score != null ? ` <span class="audit">Audit IA ${p.audit_score}<small>/100</small></span>` : ""}</div>
+          </details>
+        </div>
+        <div class="actions">
+          <a href="modifier.html?produit=${p.id}"><button type="button">Modifier</button></a>
+          <button type="button" class="primary" data-open="${p.id}">Auditer</button>
+        </div></div>`;
+    }
+
+    // La file (ordre affiché) est gardée pour le bouton « Suivant » de la fiche
+    function openItem(id) {
+      const queue = visible().map((x) => x._id);
+      sessionStorage.setItem("nxQueue", JSON.stringify({ kind: tab, ids: queue }));
+      location.href = `fiche.html?${tab === "dish" ? "plat" : "produit"}=${id}#audit`;
+    }
+
+    document.querySelector("main").addEventListener("click", (e) => {
+      const t = e.target.closest("button[data-tab]");
+      if (t) { tab = t.dataset.tab; render(); return; }
+      const o = e.target.closest("button[data-open]");
+      if (o) openItem(Number(o.dataset.open));
     });
+    document.getElementById("start").onclick = () => { const first = visible()[0]; if (first) openItem(first._id); };
+    document.getElementById("only-clean").onchange = render;
 
     (async () => {
-      member = await requireTeamMember();
+      const member = await requireTeamMember();
       if (!member) return;
-      if (member.role === "agent") {
-        document.body.innerHTML = "<p class='notice'>Le compte agent ne valide pas les données.</p>";
-        return;
-      }
+      if (member.role === "agent") { document.body.innerHTML = "<p class='notice'>Le compte agent ne valide pas les données.</p>"; return; }
       document.getElementById("side").outerHTML = nav("a-valider.html");
       wireLogout();
       document.getElementById("app").hidden = false;
-      [dishCats, productCats] = await Promise.all([loadCategories("dish"), loadCategories("product")]);
-      loadDishes();
-      loadProducts();
+      if (new URLSearchParams(location.search).get("tab") === "product") tab = "product";
+      try {
+        const [dc, pc] = await Promise.all([loadCategories("dish"), loadCategories("product"), loadDishes(), loadProducts()]);
+        cats = { dish: dc, product: pc };
+        render();
+      } catch (err) {
+        document.getElementById("list").innerHTML = `<p class="notice">Erreur : ${esc(err.message || err)}</p>`;
+      }
     })();
   </script>
 </body>

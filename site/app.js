@@ -35,7 +35,7 @@ export async function requireTeamMember() {
 export function nav(active) {
   const items = [
     ["index.html", "Tableau de bord"],
-    ["a-valider.html", "À valider"],
+    ["a-valider.html", "File d'audit"],
     ["valides.html", "Validés"],
     ["produits.html", "Produits"],
     ["jury.html", "Preuves (jury)"],
@@ -44,7 +44,7 @@ export function nav(active) {
   return `<nav class="side">
     <div class="brand">NutriX Data</div>
     ${items.map(([href, label]) =>
-      `<a href="${href}" class="${href === active ? "on" : ""}">${label}</a>`).join("")}
+      `<a href="${href}" class="${href === active ? "on" : ""}">${label}${href === "a-valider.html" ? `<span class="count" id="nav-q" hidden></span>` : ""}</a>`).join("")}
     <button id="logout" class="link">Se déconnecter</button>
   </nav>`;
 }
@@ -54,6 +54,20 @@ export function wireLogout() {
     await sb.auth.signOut();
     location.href = "index.html";
   });
+  refreshQueueCount();
+}
+
+// Nombre d'éléments en attente d'audit, affiché dans le menu
+export async function refreshQueueCount() {
+  const el = document.getElementById("nav-q");
+  if (!el) return;
+  const st = ["a_valider", "verifie"];
+  const [a, b] = await Promise.all([
+    sb.from("dishes").select("*", { count: "exact", head: true }).in("status", st),
+    sb.from("products").select("*", { count: "exact", head: true }).in("status", st),
+  ]);
+  const n = (a.count || 0) + (b.count || 0);
+  if (n) { el.textContent = n; el.hidden = false; }
 }
 
 // Badges Nutri-Score (A à E) et NOVA (1 à 4)

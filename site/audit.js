@@ -15,7 +15,7 @@ export const CHECKLISTS = {
   ],
   dish: [
     ["definition", "Définition", "Nom, variante et région précis (ex. harira fassia ≠ harira de ramadan à la maison)."],
-    ["sources", "Sources", "Au moins 2 sources indépendantes avec quantités, ouvertes et relues."],
+    ["sources", "Sources", "Au moins 3 sources indépendantes avec quantités, ouvertes et relues (protocole de validation)."],
     ["grammes", "Grammes", "Tous les ingrédients en grammes, poids cru, partie comestible ; conversions justifiées."],
     ["liaison", "Liaison", "Chaque ingrédient relié à la bonne entrée d'une table officielle, dans le bon état (cru, sec, trempé)."],
     ["matiere_grasse", "Matière grasse", "Huile, smen ou beurre de cuisson présents ; pour la friture, part absorbée renseignée (% retenu)."],
@@ -26,6 +26,27 @@ export const CHECKLISTS = {
     ["scores", "Scores", "Nutri-Score marqué « calculé, non officiel » et groupe NOVA justifié."],
   ],
 };
+
+// Où regarder dans la fiche pour chaque critère (lien « voir »)
+const SEE = {
+  identite: "s-preuves", preuve_photo: "s-preuves", double_saisie: "s-valeurs", normalisation: "s-valeurs",
+  plausibilite: "s-controles", classification: "s-composition", scores: "top", ia: "s-valeurs",
+  definition: "top", sources: "s-preuves", grammes: "s-calcul", liaison: "s-calcul", matiere_grasse: "s-calcul",
+  cuisson: "s-calcul", poids_cuit: "s-calcul", portion: "s-valeurs",
+};
+
+// File d'audit (remplie par la page « À valider ») : position et élément suivant
+export function queueInfo(kind, id) {
+  try {
+    const q = JSON.parse(sessionStorage.getItem("nxQueue") || "null");
+    if (!q || q.kind !== kind) return null;
+    const i = q.ids.indexOf(id);
+    if (i < 0) return null;
+    const href = (x) => x === undefined ? null : `fiche.html?${kind === "dish" ? "plat" : "produit"}=${x}#audit`;
+    return { pos: i + 1, total: q.ids.length, prev: href(q.ids[i - 1]), next: href(q.ids[i + 1]),
+      drop: () => { q.ids.splice(i, 1); sessionStorage.setItem("nxQueue", JSON.stringify(q)); } };
+  } catch { return null; }
+}
 
 const DE_FIELDS = [
   ["energy_kcal", "Énergie (kcal)", 0.5], ["fat_g", "Lipides (g)", 0.05], ["sat_fat_g", "dont AG saturés (g)", 0.05],
@@ -50,14 +71,17 @@ export function productChecks(p) {
   return out;
 }
 
-export function renderAuditPanel(el, { kind, entity, member, onDone }) {
+export function renderAuditPanel(el, { kind, entity, member, onDone, queue = null }) {
   const items = CHECKLISTS[kind];
   const isProduct = kind === "product";
   el.innerHTML = `
     <div class="panel" id="audit">
-      <h2>Audit humain (protocole v1)</h2>
-      <p class="muted">Coche chaque critère seulement après l'avoir contrôlé toi-même sur les preuves de cette page.
-        « Valider » n'est possible que si tous les critères sont cochés. Ta décision est enregistrée avec ton nom et la date.</p>
+      ${queue ? `<div class="queue-nav"><span>${queue.prev ? `<a href="${queue.prev}">← Précédent</a>` : ""}</span>
+        <span>Élément ${queue.pos} / ${queue.total}</span>
+        <span>${queue.next ? `<a href="${queue.next}">Passer →</a>` : `<a href="a-valider.html">File d'audit</a>`}</span></div>` : ""}
+      <h2 style="margin:0">Audit humain</h2>
+      <p class="muted" style="margin:4px 0 0">Coche un critère après l'avoir contrôlé toi-même (« voir » ouvre la bonne section). « Valider » s'active quand tout est coché.</p>
+      <div class="progress"><i id="audit-prog"></i></div>
       ${isProduct ? `
         <h3 style="font-size:15px;margin:14px 0 4px">Double saisie depuis la photo de l'étiquette</h3>
         <p class="muted">Ouvre la photo du tableau nutritionnel et recopie les valeurs pour 100 g <b>sans regarder</b> les valeurs enregistrées.</p>
@@ -65,7 +89,7 @@ export function renderAuditPanel(el, { kind, entity, member, onDone }) {
         <div id="de-result" class="muted">Remplis les champs pour comparer.</div>` : ""}
       <div class="checklist" style="margin-top:12px">${items.map(([k, t, d]) => `
         <label><input type="checkbox" data-ck="${k}" ${isProduct && k === "double_saisie" ? "disabled" : ""}>
-          <span><b>${esc(t)}</b><small>${esc(d)}</small></span></label>`).join("")}</div>
+          <span><b>${esc(t)}</b>${SEE[k] ? `<a class="see" href="#${SEE[k]}">voir</a>` : ""}<small>${esc(d)}</small></span></label>`).join("")}</div>
       <label style="display:block;margin:12px 0 4px;font-size:13px;color:var(--muted)">Commentaire (obligatoire pour « À corriger » et « Rejeter »)</label>
       <textarea id="audit-comment" rows="3" style="width:100%;font:inherit;padding:8px;border:1px solid var(--line);border-radius:6px"></textarea>
       <div class="actions" style="margin-top:12px">
@@ -78,7 +102,12 @@ export function renderAuditPanel(el, { kind, entity, member, onDone }) {
 
   let deResult = null;
   const boxes = () => [...el.querySelectorAll("input[data-ck]")];
-  const refresh = () => { el.querySelector("#audit-ok").disabled = !boxes().every((b) => b.checked); };
+  const refresh = () => {
+    const done = boxes().filter((b) => b.checked).length;
+    el.querySelector("#audit-prog").style.width = (done / boxes().length * 100) + "%";
+    el.querySelector("#audit-ok").disabled = done !== boxes().length;
+    el.querySelector("#audit-ok").textContent = done === boxes().length ? "Valider" : `Valider (${done}/${boxes().length})`;
+  };
   el.querySelectorAll("input[data-ck]").forEach((b) => b.addEventListener("change", refresh));
 
   if (isProduct) {
@@ -145,4 +174,5 @@ export function renderAuditPanel(el, { kind, entity, member, onDone }) {
   el.querySelector("#audit-ok").onclick = () => decide("valide");
   el.querySelector("#audit-fix").onclick = () => decide("a_corriger");
   el.querySelector("#audit-rej").onclick = () => decide("rejete");
+  refresh();
 }

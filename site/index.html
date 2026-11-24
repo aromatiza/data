@@ -24,13 +24,15 @@
     <div id="side"></div>
     <main>
       <h1>Tableau de bord</h1>
+      <p class="lead">Base marocaine de composition des aliments — état de la collecte et de la validation.</p>
       <div class="cards">
-        <div class="card"><div class="n" id="c-valides">–</div><div class="l">Plats validés</div></div>
-        <div class="card"><div class="n" id="c-attente">–</div><div class="l">Plats à valider</div></div>
+        <a class="card hl" href="a-valider.html"><div class="n" id="c-attente">–</div><div class="l">Plats à auditer →</div></a>
+        <a class="card hl" href="a-valider.html?tab=product"><div class="n" id="c-p-attente">–</div><div class="l">Produits à auditer →</div></a>
+        <a class="card" href="valides.html"><div class="n" id="c-valides">–</div><div class="l">Plats validés</div></a>
+        <a class="card" href="produits.html"><div class="n" id="c-produits">–</div><div class="l">Produits validés</div></a>
         <div class="card"><div class="n" id="c-ingr">–</div><div class="l">Ingrédients (base)</div></div>
-        <div class="card"><div class="n" id="c-produits">–</div><div class="l">Produits validés</div></div>
       </div>
-      <h2 style="font-size:18px;color:var(--forest)">Derniers rapports de l'agent</h2>
+      <h2 class="sec" style="margin-top:0">Derniers rapports de l'agent</h2>
       <table>
         <thead><tr><th>Date</th><th>Plats ajoutés</th><th>Produits ajoutés</th><th>Rapport</th></tr></thead>
         <tbody id="runs"><tr><td colspan="4" class="muted">Chargement…</td></tr></tbody>
@@ -54,12 +56,14 @@
       wireLogout();
       document.getElementById("app").hidden = false;
 
-      const [valides, attente, ingr, produits] = await Promise.all([
+      const [valides, attente, ingr, produits, pAttente] = await Promise.all([
         count("dishes", (q) => q.eq("status", "valide")),
-        count("dishes", (q) => q.eq("status", "a_valider")),
+        count("dishes", (q) => q.in("status", ["a_valider", "verifie"])),
         count("ingredients"),
         count("products", (q) => q.eq("status", "valide")),
+        count("products", (q) => q.in("status", ["a_valider", "verifie"])),
       ]);
+      document.getElementById("c-p-attente").textContent = pAttente;
       document.getElementById("c-valides").textContent = valides;
       document.getElementById("c-attente").textContent = attente;
       document.getElementById("c-ingr").textContent = ingr;
@@ -74,7 +78,7 @@
           <td>${esc(new Date(r.started_at).toLocaleString("fr-FR"))}</td>
           <td>${r.dishes_added}</td>
           <td>${r.products_added}</td>
-          <td>${esc(r.report || "")}${r.errors ? `<br><span class="tag warn">Erreurs</span> ${esc(r.errors)}` : ""}</td>
+          <td>${(r.report || "").length > 160 ? `<details><summary style="font-weight:400">${esc(r.report.slice(0, 140))}…</summary>${esc(r.report)}</details>` : esc(r.report || "")}${r.errors ? `<br><span class="tag warn">Erreurs</span> ${esc(r.errors)}` : ""}</td>
         </tr>`).join("")
         : `<tr><td colspan="4" class="muted">Aucun rapport pour l'instant.</td></tr>`;
     }
